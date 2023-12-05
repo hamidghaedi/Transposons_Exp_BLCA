@@ -50,5 +50,9 @@ id_map.RDS: A data frame is helpful to map file names to TCGA barcodes
 clinical.RDS: A data frame on clinical features for participants in TCGA-BLCA
 rmsk_annotation.RDS: The repeat masker annotation file, released from REdiscoverTE/UCSC
 te.rmk.RDS:  A subset of rmsk_annotation.RDS, that retain data only on TE elements (LINE, SINE, LTR, DNA, and Retroposon)
-master_gene_list.RDS: A compilation of different gene lists from KEGG, BIOCARTA ... InterPro, other studies like TCGA 2017, Combes et al and ...	
+master_gene_list.RDS: A compilation of different gene lists from KEGG, BIOCARTA ... InterPro, other studies like TCGA 2017, Combes et al and ...
+surv_assoicated_tes_log2CPM.RDS : The log2CPM values of TEs significantly associated with OS
+te_vst.RDS: A normalized and transformed (variance stabilizing transformation) expression matrix of intergenic TEs
+data.gsva_3k_pathways.RDS : A dataframe on the result of running GSVA using the master gene list (> 3K pathways)
+vst_normalized_all_gene_expMat_tcga.RDS: A normalized and transformed (variance stabilizing transformation) expression matrix of all genes in TCGA
 ```
