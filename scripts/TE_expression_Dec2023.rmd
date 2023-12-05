@@ -25,6 +25,7 @@ suppressWarnings(library(tidyverse))
 suppressWarnings(library(GSVA))
 library(DESeq2)
 library(org.Hs.eg.db)
+library(progress)
 
 # obtaining required objects :
 # 1. sample name mapping object ------------------------------------------------------------
@@ -121,15 +122,13 @@ ex.preProc <- function(mtx, is_TE) {
 #   }
 # }
 
-```
 
-```{r chunk4 reading pre-processed expression data, echo=FALSE, include=FALSE}
 # read preprocessed expression matrics in R 
-preProc_matx <- list.files("LINE1-BLCA/preProc_tcag_matrices/", pattern = "RDS")
+preProc_matx <- list.files("C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/preProc_tcag_matrices", pattern = "RDS")
 # Read each RDS file and assign to an object with a name without the file type extension
 for (mtx in preProc_matx) {
   # Remove file type extension and assign to an object with the same name
-  assign(sub("\\.RDS$", "", mtx), readRDS(paste0("LINE1-BLCA/preProc_tcag_matrices/", mtx)))
+  assign(sub("\\.RDS$", "", mtx), readRDS(paste0("C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/preProc_tcag_matrices/", mtx)))
 }
 ```
 
@@ -453,6 +452,13 @@ ESTIMATE_score_tcga <- read.table("C:/Users/qaedi/OneDrive - Queen's University/
 ## for GVSA analysis we use master gene list 
 master_geneList <- readRDS("C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/r_objects/master_gene_list.RDS")
 
+
+
+# an index to select gene list of intrest
+idx <- c(1:80) # from 1 to 80 are the intrested gene lists
+# create a subset
+sub_master_geneList <- master_geneList[1:80]
+
 ## normalizing expression matrix
 
 
@@ -496,53 +502,57 @@ data <- round(data)
 
 
 # VST
-data.vst <- varianceStabilizingTransformation(as.matrix(data), blind = TRUE, fitType = "parametric")
+#data.vst <- varianceStabilizingTransformation(as.matrix(data), blind = TRUE, fitType = "parametric")
+# save results in an object
+#saveRDS(data.vst, "C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/r_objects/vst_normalized_all_gene_expMat_tcga.RDS")
+# reading data back
+data.vst <- readRDS("C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/r_objects/vst_normalized_all_gene_expMat_tcga.RDS")
+
 
 
 # running GSVA
-data.gsva <- gsva(data.vst, master_geneList, mx.diff=TRUE, verbose=FALSE,min.sz=5,max.sz=500) #$es.obs
-# extract intrested signature: Immune + Epithelial + Epigenetics and ...
-epithelial_index <- grep("AG.Robertson.2017.BLCA", rownames(data.gsva))
-immport_index <-  grep("Immport", rownames(data.gsva))
-combes_index <- grep("Combes", rownames(data.gsva))
-epigen_idx <- c(36:55)
+data.gsva <- gsva(data.vst,
+                  master_geneList, # Running only on a subset of the gene list 
+                  mx.diff=FALSE,
+                  verbose=TRUE,
+                  min.sz=3,
+                  max.sz=500,
+                  method= "ssgsea",
+                  kcdf="Poisson") 
+#
+saveRDS(data.gsva, "data.gsva.RDS")
+
+# transpose dataframe
+data.gsva <- data.frame(t(data.gsva))
 
 
 # identify correlated TEs
 ## sig TEs logCPM2
 sig_TEs <- t(log2CPM[rownames(log2CPM) %in% surv_tes_fdr_0.05,])
+## normalize TEs through vst
+te.vst <- varianceStabilizingTransformation(as.matrix(round(RE_exon_1_raw_counts)), blind = TRUE, fitType = "parametric")
+sig_TEs <- t(te.vst)
 
-## Epithelial diffrentiation
-epithelial_sig <- data.frame(t(data.gsva[epithelial_index, ]))
-epithelial_sig <- epithelial_sig[rownames(sig_TEs),]
-## Immport sig
-immport_sig <- data.frame(t(data.gsva[immport_index, ]))
-immport_sig <- immport_sig[rownames(sig_TEs),]
-## Immune_pheno from combes
-combes_sig <- data.frame(t(data.gsva[combes_index, ]))
-combes_sig <- combes_sig[rownames(sig_TEs),]
-## Epigenetics
-epiGenetics_sig <- data.frame(t(data.gsva[epigen_idx, ]))
-epiGenetics_sig <- epiGenetics_sig[rownames(sig_TEs),]
-
-#
-#all(rownames(sig_TEs) == rownames(epithelial_sig))
-#TRUE
 # Create an empty dataframe to store results
 result_df <- data.frame(
-  col_names_df1 = character(),
-  col_names_df2 = character(),
+  geneSignature = character(),
+  TE = character(),
   correlation_coefficient = numeric(),
   p_value = numeric(),
   stringsAsFactors = FALSE
 )
+# Create a progress bar
+pb <- progress_bar$new(
+  format = "[:bar] :percent Elapsed: :elapsed ETA: :eta",
+  total = ncol(sig_TEs) * ncol(data.gsva)
+)
 
-# Assuming df1 and df2 are your dataframes
+# calculate correlation and extract statistics
 for (i in 1:ncol(sig_TEs)) {
-  for (j in 1:ncol(epithelial_sig)) {
+  for (j in 1:ncol(data.gsva)) {
     # Extract the columns
     x <- sig_TEs[, i]
-    y <- epithelial_sig[, j]
+    y <- data.gsva[, j]
     
     # Calculate the correlation
     correlation_result <- cor.test(x, y)
@@ -553,11 +563,14 @@ for (i in 1:ncol(sig_TEs)) {
     
     # Store the results in the dataframe
     result_df <- rbind(result_df, data.frame(
-      col_names_df1 = colnames(sig_TEs)[i],
-      col_names_df2 = colnames(epithelial_sig)[j],
+      geneSignature = colnames(data.gsva)[j],
+      TE = colnames(sig_TEs)[i],
       correlation_coefficient = correlation_coefficient,
       p_value = p_value
     ))
+    
+    # Increment the progress bar
+    pb$tick()
   }
 }
 
@@ -565,8 +578,7 @@ for (i in 1:ncol(sig_TEs)) {
 result_df$FDR <- p.adjust(result_df$p_value, method = "fdr")
 
 # select TEs
-TEs_cor_epithelial <- result_df$col_names_df1[result_df$correlation_coefficient >= 0.4 &
-                                                result_df$FDR < 0.05]
+TEs_cor_immune_epithelial_epigen <- result_df$col_names_df1[result_df$correlation_coefficient >= abs(0.4), ]
 
 
 # Print or view the result dataframe
