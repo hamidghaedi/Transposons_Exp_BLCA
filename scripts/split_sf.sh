@@ -4,7 +4,7 @@
 
 # Define paths
 work_dir="/home/ghaedi/projects/def-gooding-ab/ghaedi/loci_wise_TE_exp"
-sf_files_path="/home/ghaedi/projects/def-gooding-ab/ghaedi/quant_res_REdisc/"
+sf_files_path="/home/ghaedi/projects/def-gooding-ab/ghaedi/quant_res_REdisc/" 
 
 # Set up working directory
 cd "$work_dir"
