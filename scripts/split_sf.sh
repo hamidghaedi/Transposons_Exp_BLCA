@@ -1,4 +1,6 @@
 #!/bin/bash
+# A script to split sf file into two subsets: zeroExp and nonZeroExp 
+
 
 # Define paths
 work_dir="/home/ghaedi/projects/def-gooding-ab/ghaedi/loci_wise_TE_exp"
