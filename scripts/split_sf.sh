@@ -1,18 +1,22 @@
 #!/bin/bash
 
+# Define paths
+work_dir="/home/ghaedi/projects/def-gooding-ab/ghaedi/loci_wise_TE_exp"
+sf_files_path="/home/ghaedi/projects/def-gooding-ab/ghaedi/quant_res_REdisc/"
+
 # Set up working directory
-cd /home/ghaedi/projects/def-gooding-ab/ghaedi/loci_wise_TE_exp
+cd "$work_dir"
 
 # Create necessary directories if they don't exist
 mkdir -p nonZero_exp/all
 mkdir -p zero_exp
 
 # Get the total number of .sf files
-total_files=$(ls -1 /home/ghaedi/projects/def-gooding-ab/ghaedi/quant_res_REdisc/*.sf | wc -l)
+total_files=$(ls -1 "$sf_files_path"*.sf | wc -l)
 file_index=0
 
-# Iterate through all .sf files in quant_res_REdisc
-for sf_file in /home/ghaedi/projects/def-gooding-ab/ghaedi/quant_res_REdisc/*.sf; do
+# Iterate through all .sf files in sf_file_path
+for sf_file in "$sf_files_path"*.sf; do
     ((file_index++))
 
     # Extract the filename without extension
