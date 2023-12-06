@@ -42,7 +42,7 @@ library(progress)
 # -----------------------------------------------------------------------------------------
 
 # 2. Repeatmasker annotation file and its subset for TEs------------------------------------
-#te_rmk <- readRDS("LINE1-BLCA/r_objects/te_rmk.RDS")
+te_rmk <- readRDS("LINE1-BLCA/r_objects/te_rmk.RDS")
 # TE rep name in the rmk object
 #TErepName <- te_rmk$repName
 # The above object was created by subset rmk to retain TEs : LINE, SINE, LTR, Retroposon and DNA
@@ -511,27 +511,58 @@ data.vst <- readRDS("C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE
 
 
 # running GSVA
-data.gsva <- gsva(data.vst,
-                  master_geneList, # Running only on a subset of the gene list 
-                  mx.diff=FALSE,
-                  verbose=TRUE,
-                  min.sz=3,
-                  max.sz=500,
-                  method= "ssgsea",
-                  kcdf="Poisson") 
+# data.gsva <- gsva(data.vst,
+#                   master_geneList, # Running only on a subset of the gene list 
+#                   mx.diff=FALSE,
+#                   verbose=TRUE,
+#                   min.sz=3,
+#                   max.sz=500,
+#                   method= "ssgsea",
+#                   kcdf="Poisson") 
 #
-saveRDS(data.gsva, "data.gsva.RDS")
+#saveRDS(data.gsva, "C:/Users/qaedi/OneDrive - Queen's #University/Documents/LINE1-BLCA/r_objects/data.gsva_3k_pathways.RDS")
+# load 
 
+data.gsva <- readRDS("C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/r_objects/data.gsva_3k_pathways.RDS")
 # transpose dataframe
 data.gsva <- data.frame(t(data.gsva))
+
 
 
 # identify correlated TEs
 ## sig TEs logCPM2
 sig_TEs <- t(log2CPM[rownames(log2CPM) %in% surv_tes_fdr_0.05,])
+
+# aggregate TEs at class level
+tmp <- data.frame(log2CPM[rownames(log2CPM) %in% surv_tes_fdr_0.05,])
+# 
+rmk_tmp <- unique(te_rmk[, c(3:5)][te_rmk[, c(3:5)]$repName %in% rownames(tmp), ])
+
+tmp$repName <- rownames(tmp)
+# joing 
+tmp <- left_join(tmp, rmk_tmp)
+#
+sig_TEs_fam <- tmp[, -c(434, 435)] %>% 
+  group_by(repFamily) %>%
+  summarise_all(sum) %>%
+  data.frame() 
+
+#
+rownames(sig_TEs_fam) <- sig_TEs_fam$repFamily
+sig_TEs_fam <- sig_TEs_fam[, -1]
+colnames(sig_TEs_fam) = gsub('[.]', "-", colnames(sig_TEs_fam))
+sig_TEs_fam <- t(sig_TEs_fam)
+
+
 ## normalize TEs through vst
 te.vst <- varianceStabilizingTransformation(as.matrix(round(RE_exon_1_raw_counts)), blind = TRUE, fitType = "parametric")
-sig_TEs <- t(te.vst)
+te.vst <- t(te.vst)
+
+
+# making sure about the row names
+#data.gsva <- data.gsva[rownames(sig_TEs),]
+data.gsva <- data.gsva[rownames(sig_TEs_fam),]
+
 
 # Create an empty dataframe to store results
 result_df <- data.frame(
@@ -549,7 +580,7 @@ pb <- progress_bar$new(
 
 # calculate correlation and extract statistics
 for (i in 1:ncol(sig_TEs)) {
-  for (j in 1:ncol(data.gsva)) {
+  for (j in 1:ncol(data.gsva[, c(1:80)])) {
     # Extract the columns
     x <- sig_TEs[, i]
     y <- data.gsva[, j]
