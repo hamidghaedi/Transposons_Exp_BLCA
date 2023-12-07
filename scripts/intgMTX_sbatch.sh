@@ -19,4 +19,4 @@ source py_env/bin/activate
 cd /home/ghaedi/projects/def-gooding-ab/ghaedi/loci_wise_TE_exp
 
 # run script
-python ./ntergenicMTX_maker.py
+python ./intergenicMTX_maker.py
