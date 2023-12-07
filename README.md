@@ -13,8 +13,11 @@ Large files are hosted on OneDrive, and the following are the names and descript
 ├── data
 │   ├── REdiscoverTE_results_tcga
 |   ├── preProc_tcag_matrices
+|   ├── RE_intergenic_4_loci_raw_counts.gz
+|   ├── quant_files_tcga.tar.gz
 │   └── r_objects
 ```
+
 
  ```REdiscoverTE_results_tcga```  contains the following files:
 
@@ -56,3 +59,10 @@ te_vst.RDS: A normalized and transformed (variance stabilizing transformation) e
 data.gsva_3k_pathways.RDS : A dataframe on the result of running GSVA using the master gene list (> 3K pathways)
 vst_normalized_all_gene_expMat_tcga.RDS: A normalized and transformed (variance stabilizing transformation) expression matrix of all genes in TCGA
 ```
+
+```RE_intergenic_4_loci_raw_counts.gz``` This is an expression matrix of raw counts for intergenic TEs while the rowname inidcate the exact loci of the element. The rownames are in the following structure:
+repName|repFamily|repClass|coordinate e.g:
+
+'L1MB3|L1|LINE|2__104370544_104370587'
+
+```quant_files_tcga.tar.gz``` sf files output from Salmon internally run by REdoscoverTE
