@@ -13,9 +13,9 @@ Large files are hosted on OneDrive, and the following are the names and descript
 ├── data
 │   ├── REdiscoverTE_results_tcga
 |   ├── preProc_tcag_matrices
+|   ├──  r_objects
 |   ├── RE_intergenic_4_loci_raw_counts.gz
-|   ├── quant_files_tcga.tar.gz
-│   └── r_objects
+│   └── quant_files_tcga.tar.gz
 ```
 
 
