@@ -887,7 +887,22 @@ cor_TE_sigScore_xcell <- correlateMatrix(tmp_TE_signatureScore, xcell)
 
 ```{r chunk11  TE signature development using LASSO , echo=FALSE}
 ## APPROACH 2 : USING LASSO regression model to develop the signature
+survData <- data.frame(
+    barcode = clinicalData$barcode,
+    event = ifelse(clinicalData$paper_Vital.status == "Alive", 0,
+                     ifelse(clinicalData$paper_Vital.status == "Dead", 1, NA)),
+    time = as.numeric(clinicalData$paper_Combined.days.to.last.followup.or.death))
 
+tmp <- t(log2CPM[rownames(log2CPM) %in% overlap_cor_sig_allTEs_surv_tes_fdr_0.05,])
+# set order
+tmp <- tmp[survData$barcode,]
+# confirm order
+all(rownames(tmp)==survData$barcode)
+#
+lassoDat <- cbind(survData, tmp)
+lassoDat <- lassoDat[, -1]
+
+#
 
 ```
 
