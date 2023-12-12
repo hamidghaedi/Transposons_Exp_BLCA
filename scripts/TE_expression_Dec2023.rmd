@@ -9,6 +9,11 @@ output: html_document
 ```{r setup, include=TRUE, cache = FALSE, echo=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 knitr::opts_knit$set(root.dir = "C:/Users/qaedi/OneDrive - Queen's University/Documents")
+# work from Home Station
+root_path = "C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/"
+# work from Work Station
+root_path = "G:/LINE1-BLCA/"
+
 ```
 
 ## Basic statistics on RNA-seq read counts
@@ -42,13 +47,13 @@ library(progress)
 # -----------------------------------------------------------------------------------------
 
 # 2. Repeatmasker annotation file and its subset for TEs------------------------------------
-te_rmk <- readRDS("C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/r_objects/te_rmk.RDS")
+te_rmk <- readRDS(paste0(root_path, "/r_objects/te_rmk.RDS"))
 
 #
-intergenicTE_rmk <- data.frame(data.table::fread("C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/te_intergenic_rmsk.tsv"))
+intergenicTE_rmk <- data.frame(data.table::fread(paste0(root_path,"/te_intergenic_rmsk.tsv")))
 
 
-intergenicTE_rmk <- readRDS("C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/r_objects/intergenicTE_rmk.RDS")
+intergenicTE_rmk <- readRDS(paste0(root_path,"/r_objects/intergenicTE_rmk.RDS"))
 
 # TE rep name in the rmk object
 #TErepName <- te_rmk$repName
@@ -58,255 +63,32 @@ intergenicTE_rmk <- readRDS("C:/Users/qaedi/OneDrive - Queen's University/Docume
 ##--------------------------------------------------------------------------------------------
 
 # 3. clinical data 
-clinical_data <- readRDS("C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/r_objects/clinical.rds")
+clinical_data <- readRDS(paste0(root_path, "/r_objects/clinical.rds"))
 
 
 
-ex.preProc <- function(mtx, is_TE) {
-  # A function pre-process expression matrix, it drops non TEs element and set the expression matrix column name to TCGA barcode
-  # mtx:  an expression matrix
-  # is_TE: a logical argument , if TE exp mtx is passing, set this to TRUE
-  # setting
-  if (is_TE) {
-    # step 1 dropping non TE elements
-    tmp <- mtx[rownames(mtx) %in% TErepName, ]
-    # print the number of TE elements retained in the matrix.
-    cat("The number of retained TEs in the matrix is ", nrow(tmp), "\n")
-    # step 2 setting the column names to TCGA barcode
-    matched_id <- match(colnames(tmp), id_map$shortFileName)
-    
-    if (length(matched_id) == ncol(tmp)) {
-      colnames(tmp) <- id_map$cases[matched_id]
-      cat("All column names in the expression matrix have a match in ID map file \n")
-    }
-    
-    if (length(match(colnames(tmp), id_map$shortFileName)) != ncol(tmp)) {
-      cat("Not all columns in the expression matrix have a match in ID map file \n")
-      no_match <- id_map$cases[which(!matched_id)]
-      cat("See below for non-match columns:\n")
-      cat(no_match)
-    }
-  } 
-  else {
-    # the matrix is a gene expression matrix and it needs just column names to be matched to TCGA barcode
-    tmp <- mtx
-    matched_id <- match(colnames(mtx), id_map$shortFileName)
-    
-    if (length(matched_id) == ncol(mtx)) {
-      colnames(tmp) <- id_map$cases[matched_id]
-      cat("All column names in the expression matrix have a match in ID map file \n")
-    }
-    
-    if (length(match(colnames(mtx), id_map$shortFileName)) != ncol(mtx)) {
-      cat("Not all columns in the expression matrix have a match in ID map file \n")
-      no_match <- id_map$cases[which(!matched_id)]
-      cat("See below for non-match columns:\n")
-      cat(no_match)
-    }
-  }
-  return(tmp)
+# LOADING HELPER FUNCTIONS
+
+
+## Path to functions
+func_path <- "C:/Users/User1/Documents/Transposons_Exp_BLCA_GitHub/scripts/rFunctions/"
+rFuncs <- list.files(func_path, pattern = "\\.R$", full.names = TRUE)
+
+for(func in rFuncs){
+  
+  cat("loading ", basename(func), " \n")
+  source(func)
 }
 
-# 
-correlateMatrix <- function(df1, df2, show_progress = TRUE) {
-  
-  #A function  to calculate the Pearson correlation between columns of two data frames, returning 
-  # the correlation coefficient, p-value, and false discovery rate (FDR). 
-  
-  # Check if data frames have the same number of rows
-  if (nrow(df1) != nrow(df2)) {
-    stop("Data frames must have the same number of rows.")
-  }
+## Documentation are written using document::document(file_name = path, check_package = FALSE)
+## List .R files
+#rFuncs <- list.files(func_path, pattern = "\\.R$", full.names = TRUE)
 
-  # Create a progress bar
-  pb <- NULL
-  if (show_progress) {
-    pb <- progress_bar$new(
-      format = "[:bar] :percent Elapsed: :elapsed ETA: :eta",
-      total = ncol(df1) * ncol(df2)
-    )
-  }
-
-  # Preallocate result data frame
-  result_df <- data.frame(
-    var1 = character(),
-    var2 = character(),
-    correlation_coefficient = numeric(),
-    p_value = numeric(),
-    stringsAsFactors = FALSE
-  )
-
-  # Calculate correlation and extract statistics
-  for (i in 1:ncol(df1)) {
-    for (j in 1:ncol(df2)) {
-      # Extract the columns
-      x <- df1[, i]
-      y <- df2[, j]
-
-      # Calculate the correlation
-      correlation_result <- cor.test(x, y)
-
-      # Extract the correlation coefficient and p-value
-      correlation_coefficient <- correlation_result$estimate
-      p_value <- correlation_result$p.value
-
-      # Store the results directly in the preallocated data frame
-      result_df <- rbind(result_df, list(
-        var1 = colnames(df1)[i],
-        var2 = colnames(df2)[j],
-        correlation_coefficient = correlation_coefficient,
-        p_value = p_value
-      ))
-
-      # Increment the progress bar
-      if (show_progress) pb$tick()
-    }
-  }
-
-  # Add FDR to the result table
-  result_df$FDR <- p.adjust(result_df$p_value, method = "fdr")
-
-  # Return result
-  return(result_df)
-}
-
-#
-aggregate_repName2repFamily <- function(expressionMatrix, te_rmk) {
-  # A function to aggregate TE expression  at Family level by taking mean
-  # check to see if tr_rmk is present in environment, if not rise a message 
-  # and say "TE repeat masker annotation file is not available"
-  
-  if (!requireNamespace("dplyr", quietly = TRUE)) {
-    install.packages("dplyr")
-  }
-  library(dplyr)
-  
-  tmp <- data.frame(expressionMatrix)
-  
-  if (exists("te_rmk")) {
-    rmk_tmp <- unique(te_rmk[, c("repName", "repFamily")][te_rmk$repName %in% rownames(tmp), ])
-    tmp$repName <- rownames(tmp)
-    tmp <- left_join(tmp, rmk_tmp, by = "repName")
-    
-    expMat <- tmp[, !colnames(tmp) %in% c("repName")] %>%
-      group_by(repFamily) %>%
-      summarise_all(mean) %>%
-      data.frame()
-    
-    rownames(expMat) <- expMat$repFamily
-    expMat <- expMat[, -1]
-    colnames(expMat) <- gsub('[.]', "-", colnames(expMat))
-    
-    return(expMat)
-  } else {
-    stop("TE repeat masker annotation file 'te_rmk' is not available.")
-  }
-}
-
-
-# 
-survAnalysisOnExpMat <- function(expressionMatrix, clinicalData, timeColumn, eventColumn) {
-  # A function to calculate survival analysis on an expression matrix,
-  # Assumptions: expressionMatrix is an expression matrix
-  # clinicalData 
-        # is a dataframe where the patients ids are in barcode column
-        # There is event column filled with 0(no-evenet) and 1(event)
-        # By default it can convert values "Alive" and "Dead" to , 0 and 1
-        # A time column 
-  # library
-    if (!requireNamespace("survminer", quietly = TRUE)) {
-      install.packages("survminer")
-    }
-    library(survminer)
-  
-  # Creating survival data
-    barcode = clinicalData$barcode
-    if(all(clinicalData[[eventColumn]]) %in% c(0, 1)){
-      event = numeric(clinicalData[[eventColumn]])
-    } else {
-      event = ifelse(clinicalData[[eventColumn]] == "Alive", 0,
-                     ifelse(clinicalData[[eventColumn]] == "Dead", 1, NA))
-    }
-    
-    time = as.numeric(clinicalData[[timeColumn]])
-    survData <- data.frame(barcode = barcode, event = event, time = time)
-
-  # Combined datasets
-  # first transpose the expression matrix
-  message("Processing expression matrix...")  
-  expressionMatrix <- t(expressionMatrix)
-  expressionMatrix <- expressionMatrix[survData$barcode,]
-  
-  if (all(rownames(expressionMatrix) == survData$barcode)) {
-    survData <- cbind(survData, expressionMatrix)
-  } else {
-    stop("The order of samples in expression matrix and clinical data are not matched")
-  }
-  
-  # Determine the optimal cutpoint of variables
-  message("Categorizing expression values into low and high expression ")  
-  res.cut <- surv_cutpoint(survData, time = "time", event = "event",
-                           variables = colnames(survData)[4:ncol(survData)])
-
-  # Create a named vector
-  cut_point <- setNames(sapply(colnames(expressionMatrix), function(te) res.cut[[te]]$estimate),
-                        colnames(expressionMatrix))
-
-  # Make expression values categorical
-  for (i in 4:ncol(survData)) {
-    te <- colnames(survData)[i]
-    survData[, i] <- as.factor(ifelse(survData[, i] < cut_point[te], "low-exp", "high-exp"))
-  }
-  
-  # Drop variables with just one level of data
-  to_drop <- colnames(survData)[sapply(survData, function(x) length(unique(x)) < 2)]
-  if(length(to_drop)!= 0){
-    survData_filt1 <- survData[, -which(colnames(survData) %in% to_drop)]
-  }else{
-    survData_filt1 <- survData
-  }
-  
-  # Dropping columns 
-  survData_filt2 <- survData_filt1[, -which(colnames(survData_filt1) %in% c("barcode", "event", "time"))]
-  
-  # Perform survival analysis
-  # Create a survival object using the 'Surv' function
-  message("Performing survival analysis....")
-  survival_data <- with(survData_filt1, Surv(time, event))
-  
-  # Fit Cox proportional hazards models for all variables
-  cox_models <- lapply(names(survData_filt2), function(variable) {
-    cox_model <- coxph(survival_data ~ survData_filt2[[variable]], data = survData_filt2)
-    return(cox_model)
-  })
-  
-  # Extract summary statistics for each model
-  coxp_summaries <- lapply(cox_models, summary)
-  names(coxp_summaries) <- colnames(survData_filt2)
-  
-  # Initialize an empty dataframe
-  surv_summary <- data.frame(var_name = character(), Hazard_Ratio = numeric(), P_Value = numeric(), stringsAsFactors = FALSE)
-  
-  # Extract variable names, Hazard Ratios, and P-Values
-  for (i in seq_along(coxp_summaries)) {
-    variable_name <- names(coxp_summaries)[i]
-    # Extract Hazard Ratio and P-Value
-    coef_summary <- coxp_summaries[[i]]$coef
-    hazard_ratio <- exp(coef_summary[1])  # Exponentiate the coefficient to get Hazard Ratio
-    p_value <- coef_summary[5]            # Extract the P-Value
-    # Append to the dataframe
-    surv_summary <- rbind(surv_summary, data.frame(var_name = variable_name, Hazard_Ratio = hazard_ratio, P_Value = p_value))
-  }
-  
-  # Adjust P-Values
-  surv_summary$bonferroni.Adj.Pval <- p.adjust(surv_summary$P_Value, method = 'bonferroni')
-  surv_summary$holm.Adj.Pval <- p.adjust(surv_summary$P_Value, method = 'holm')
-  surv_summary$hochberg.Adj.Pval <- p.adjust(surv_summary$P_Value, method = 'hochberg')
-  surv_summary$FDR <- p.adjust(surv_summary$P_Value, method = 'fdr')
-  message("Done.")
-  # Return the object
-  return(surv_summary)
-}
+## Iterate through functions
+#for (func in rFuncs) {
+#  cat("\n", "Creating document for ", func, ". \n")
+#  document::document(func, check_package = FALSE)
+#}
 
 
 
@@ -332,11 +114,11 @@ survAnalysisOnExpMat <- function(expressionMatrix, clinicalData, timeColumn, eve
 
 
 # read preprocessed expression matrics in R 
-preProc_matx <- list.files("C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/preProc_tcag_matrices", pattern = "RDS")
+preProc_matx <- list.files(paste0(root_path,"preProc_tcag_matrices/"), pattern = "RDS")
 # Read each RDS file and assign to an object with a name without the file type extension
 for (mtx in preProc_matx) {
   # Remove file type extension and assign to an object with the same name
-  assign(sub("\\.RDS$", "", mtx), readRDS(paste0("C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/preProc_tcag_matrices/", mtx)))
+  assign(sub("\\.RDS$", "", mtx), readRDS(paste0(root_path,"/preProc_tcag_matrices/", mtx)))
 }
 ```
 
@@ -590,13 +372,17 @@ TE_fam_expMat_logCPM <- aggregate_repName2repFamily(sigTE_log2CPM, te_rmk)
 
 
 
-all(rownames(clinical_data2) == colnames(TE_fam_expMat_logCPM))
+all(rownames(clinical_data) %in% colnames(TE_fam_expMat_logCPM))
+
 #1] TRUE
+TE_fam_expMat_logCPM <- TE_fam_expMat_logCPM[, rownames(clinical_data)]
+#
+all(rownames(clinical_data) == colnames(TE_fam_expMat_logCPM))
 
 
 # Running survival analysis 
 surv_summary_repFamily <- survAnalysisOnExpMat(expressionMatrix = TE_fam_expMat_logCPM, 
-                                     clinicalData = clinical_data2,
+                                     clinicalData = clinical_data,
                                      timeColumn ="paper_Combined.days.to.last.followup.or.death",
                                       eventColumn = "vital_status")
 
@@ -637,7 +423,7 @@ sig_TEs_fam <- t(TE_fam_expMat_logCPM)
 # TEs need to be grouped at repFamily level for correlation analysis
 
 ## for GVSA analysis we use master gene list 
-master_geneList <- readRDS("C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/r_objects/master_gene_list.RDS")
+master_geneList <- readRDS(paste0(root_path, "r_objects/master_gene_list.RDS"))
 
 # an index to select gene list of intrest
 idx <- c(1:80) # from 1 to 80 are the intrested gene lists
@@ -666,22 +452,22 @@ data <- left_join(data, ens2symbol)
 # drop unnecessary columns
 data <- data[, -which(colnames(data) %in% c("ENSEMBL", "ROWNAME"))]
 # If there are duplicates, calculate the mean
-df <- data %>% 
-  group_by(SYMBOL) %>%
-  summarise_all(mean) 
-# 
-data <- data.frame(df)
-rm(df)
-# setting rowname
-data <- data[!is.na(data$SYMBOL),]
-# set rownames
-rownames(data) <- data$SYMBOL
-# dropp symbol
-data <- data[, -which(names(data) == "SYMBOL")]
-# replace dots with "-"
-colnames(data) = gsub('[.]', "-", colnames(data))
-# 
-data <- round(data)
+# df <- data %>% 
+#   group_by(SYMBOL) %>%
+#   summarise_all(mean) 
+# # 
+# data <- data.frame(df)
+# rm(df)
+# # setting rowname
+# data <- data[!is.na(data$SYMBOL),]
+# # set rownames
+# rownames(data) <- data$SYMBOL
+# # dropp symbol
+# data <- data[, -which(names(data) == "SYMBOL")]
+# # replace dots with "-"
+# colnames(data) = gsub('[.]', "-", colnames(data))
+# # 
+# data <- round(data)
 
 
 
@@ -690,7 +476,7 @@ data <- round(data)
 # save results in an object
 #saveRDS(data.vst, "C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/r_objects/vst_normalized_all_gene_expMat_tcga.RDS")
 # reading data back
-data.vst <- readRDS("C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/r_objects/vst_normalized_all_gene_expMat_tcga.RDS")
+data.vst <- readRDS(paste0(root_path,"r_objects/vst_normalized_all_gene_expMat_tcga.RDS"))
 
 
 
@@ -707,7 +493,7 @@ data.vst <- readRDS("C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE
 #saveRDS(data.gsva, "C:/Users/qaedi/OneDrive - Queen's #University/Documents/LINE1-BLCA/r_objects/data.gsva_3k_pathways.RDS")
 # load 
 
-data.gsva <- readRDS("C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/r_objects/data.gsva_3k_pathways.RDS")
+data.gsva <- readRDS(paste0(root_path, "r_objects/data.gsva_3k_pathways.RDS"))
 # transpose dataframe
 data.gsva <- data.frame(t(data.gsva))
 
@@ -734,7 +520,7 @@ filtCor_all_TE_repName_gsva <- cor_all_TE_repName_gsva[abs(cor_all_TE_repName_gs
 
 # sig TEs
 filtCor_sig_TE_repName_gsva <- cor_sig_TE_repName_gsva[abs(cor_sig_TE_repName_gsva$correlation_coefficient) >= 0.4 & cor_sig_TE_repName_gsva$FDR < 0.05, ]
-
+cor_all_TE_repName_gsva<- unique(filtCor_all_TE_repName_gsva$var1)
 # count number of TES
 overlap_cor_sig_allTEs_surv_tes_fdr_0.05 <- unique(filtCor_all_TE_repName_gsva$var1[filtCor_all_TE_repName_gsva$var1 %in% surv_tes_fdr_0.05])
 
@@ -743,10 +529,12 @@ overlap_cor_sig_allTEs_surv_tes_fdr_0.05 <- unique(filtCor_all_TE_repName_gsva$v
 ## Immune scores from ESTIMATE
 #working with data from : https://www.frontiersin.org/articles/10.3389/fimmu.2021.672158/full
 
-estDat = read.csv("C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/estimateScoreTCGA.csv")
+estDat = read.csv(paste0(root_path, "estimateScoreTCGA.csv"))
 
-tmeDat = read.csv("C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/tmeScoreTCGA.csv")
+tmeDat = read.csv(paste0(root_path, "tmeScoreTCGA.csv"))
 estDattmeDat <- dplyr::left_join(estDat, tmeDat)
+# drop rows with NA
+estDattmeDat <- estDattmeDat[!is.na(rownames(estDattmeDat)),]
 
 # drop ID column from estDaand ..
 rownames(estDattmeDat) <- estDattmeDat$ID
@@ -764,30 +552,33 @@ estDattmeDat <- estDattmeDat[rownames(filt_all_TEs),]
 #
 all(rownames(estDattmeDat) ==rownames(filt_all_TEs))
 
-# check rownames
-estDattmeDat <- estDattmeDat[substr(rownames(all_TEs),1,15),]
-# cjhck orders
-all(rownames(estDattmeDat)==substr(rownames(all_TEs),1,15))
 
 # COR
 cor_all_TE_repName_estTE <- correlateMatrix(filt_all_TEs, estDattmeDat)
 #
 filtCor_all_TE_repName_estTE <- cor_all_TE_repName_estTE[abs(cor_all_TE_repName_estTE$correlation_coefficient) >= 0.4 & cor_all_TE_repName_estTE$FDR < 0.05, ]
+# check to see if the significant TEs are already in the overlap_cor_sig_allTEs_surv_tes_fdr_0.05
+table(unique(filtCor_all_TE_repName_estTE$var1) %in% overlap_cor_sig_allTEs_surv_tes_fdr_0.05)
 
+# define set of TEs significantly coorelated with ESTIMAYTE score
+cor_all_TE_repName_estTME <- unique(filtCor_all_TE_repName_estTE$var1)
 
+# Add Tes to the selected list of TEs
+overlap_cor_sig_allTEs_surv_tes_fdr_0.05 <- surv_tes_fdr_0.05[surv_tes_fdr_0.05 %in% unique(c(cor_all_TE_repName_gsva, cor_all_TE_repName_estTME))]
 
 ```
 
+## TE signature development uisng GSVA approach
 ```{r chunk10  TE signature development using GSVA , echo=FALSE}
 
 ## APPROACH 1 : USING GSVA and then validating using cor and regression
 
-# we may consider the following TEs to develop a TE signature score per:
+# we may consider the following TEs as gene list to develop a TE signature score:
 
 #____________ 1 full set of TEs
 overlap_cor_sig_allTEs_surv_tes_fdr_0.05 # overlap between all TEs significantly associated gsva with Surv TEs
 
-#_____________ 2 Split by cor test result
+#_____________ 2 Split by cor test + clustering result
 corDat <- t(log2CPM)
 corDat <- corDat[, colnames(corDat) %in% overlap_cor_sig_allTEs_surv_tes_fdr_0.05]
 # calculate correlation
@@ -823,12 +614,89 @@ TE_geneList <- list("all_60_TEs" = overlap_cor_sig_allTEs_surv_tes_fdr_0.05,
 
 
 # use the TE_geneList to define TE signatures
-TE_signatureScore <- t(gsva(log2CPM, TE_geneList, 
+TE_signatureScore_gsva <- t(gsva(log2CPM, TE_geneList, 
                           min.sz=1,
                           max.sz=500,
                           method= "gsva",
                             kcdf="Gaussian"))
 
+```
+## TE signature development uisng LASSO regression model
+
+```{r chunk11  TE signature development using LASSO , echo=FALSE}
+## APPROACH 2 : USING LASSO regression model to develop the signature
+survData <- data.frame(
+    barcode = clinical_data$barcode,
+    event = ifelse(clinical_data$paper_Vital.status == "Alive", 0,
+                     ifelse(clinical_data$paper_Vital.status == "Dead", 1, NA)),
+    time = as.numeric(clinical_data$paper_Combined.days.to.last.followup.or.death))
+
+tmp <- t(log2CPM[rownames(log2CPM) %in% overlap_cor_sig_allTEs_surv_tes_fdr_0.05,])
+# set order
+tmp <- tmp[survData$barcode,]
+# confirm order
+all(rownames(tmp)==survData$barcode)
+#
+lassoDat <- cbind(survData, tmp)
+lassoDat <- lassoDat[, -1]
+
+#
+
+```
+## TE signature development uisng PCA  (defining a meta gene per sample)
+
+```{r chunk12  TE signature development using PCA , echo=FALSE}
+## APPROACH 2 : USING LASSO regression model to develop the signature
+library(BhGLM)
+
+# lets define group of TEs based on their HR
+surv_summary$HRgroup <- as.character(cut(surv_summary$Hazard_Ratio,
+                            breaks = c(0.40,  0.70, 1.20, 3),
+                            labels = c("UnFav","NotSig", "Fav")))
+
+
+survGroup <- surv_summary[surv_summary$var_name %in% overlap_cor_sig_allTEs_surv_tes_fdr_0.05,]
+# create list in needed format
+survGroupList <- survGroup %>%
+  group_split(HRgroup, keep = FALSE) %>%
+  setNames(unique(survGroup$HRgroup)) %>%
+  lapply(function(df) df$var_name)
+# survdata
+survData <- data.frame(
+    barcode = clinical_data$barcode,
+    event = ifelse(clinical_data$paper_Vital.status == "Alive", 0,
+                     ifelse(clinical_data$paper_Vital.status == "Dead", 1, NA)),
+    time = as.numeric(clinical_data$paper_Combined.days.to.last.followup.or.death))
+
+# remove NAs
+survData <- survData[!is.na(survData$time) & survData$time > 0, ]
+
+
+
+tmp <- t(log2CPM[rownames(log2CPM) %in% overlap_cor_sig_allTEs_surv_tes_fdr_0.05,])
+# set order
+tmp <- data.frame(tmp[survData$barcode,])
+# confirm order
+all(rownames(tmp)==survData$barcode)
+
+#
+#  Fit Bayesian Spike-and-Slab Lasso Model:
+y <- Surv(survData$time, survData$event)
+# set group
+group <-survGroupList
+
+
+# Fit Bayesian Cox Proportional Hazards Model
+f2 <- bmlasso(x = tmp, y = y, family = "cox", ss = c(0.04, 0.5), group = group)
+#
+
+```
+## Validation of TE sigs:
+The validation can be done through two different approaches: (1) Examining the correlation between TE sig and interesting phenotypes (ssGSEA, CIBERSORT, ESTIMATE, xCell, Regulon score and etc ...) and (2) through KAPS algorithm
+
+### (1) Examining the correlation between TE sig and interesting phenotypes
+
+```{r chunk13  TE signature validation , echo=FALSE}
 # correlation with gene sets
 # 1___________ What ever present in master_genlist 3k
 
@@ -839,7 +707,7 @@ tmp_TE_signatureScore <- TE_signatureScore[rownames(data.gsva),]
 cor_TE_sigScore_gsva <- correlateMatrix(TE_signatureScore, data.gsva[, c(1:77)]) #77 selected pathways
 
 # 2________CIBERSORT deconv. immune cell types: https://bmccancer.biomedcentral.com/articles/10.1186/s12885-022-09794-9 Table S4
-cibersortDAt <- readRDS("C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/r_objects/cibersortDAt.RDS")
+cibersortDAt <- readRDS(paste0(root_path, "r_objects/cibersortDAt.RDS"))
 #
 all(rownames(TE_signatureScore) %in% rownames(cibersortDAt))
 #
@@ -864,7 +732,7 @@ cor_TE_sigScore_estTme[order(abs(cor_TE_sigScore_estTme$correlation_coefficient)
 
 # 3____________ x-cell
 ##
-xcell = data.frame(data.table::fread("C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/xCell_TCGA_RSEM.txt"), row.names = T)
+xcell = data.frame(data.table::fread(paste0(root_path, "xCell_TCGA_RSEM.txt")), row.names = T)
 # repair sample name in header
 colnames(xcell) = gsub('[.]', "-", colnames(xcell))
 xcell = t(xcell)
@@ -885,28 +753,8 @@ cor_TE_sigScore_xcell <- correlateMatrix(tmp_TE_signatureScore, xcell)
 
 ```
 
-```{r chunk11  TE signature development using LASSO , echo=FALSE}
-## APPROACH 2 : USING LASSO regression model to develop the signature
-survData <- data.frame(
-    barcode = clinicalData$barcode,
-    event = ifelse(clinicalData$paper_Vital.status == "Alive", 0,
-                     ifelse(clinicalData$paper_Vital.status == "Dead", 1, NA)),
-    time = as.numeric(clinicalData$paper_Combined.days.to.last.followup.or.death))
 
-tmp <- t(log2CPM[rownames(log2CPM) %in% overlap_cor_sig_allTEs_surv_tes_fdr_0.05,])
-# set order
-tmp <- tmp[survData$barcode,]
-# confirm order
-all(rownames(tmp)==survData$barcode)
-#
-lassoDat <- cbind(survData, tmp)
-lassoDat <- lassoDat[, -1]
-
-#
-
-```
-
-```{r chunk12  TE signature development KAPS analysis to cluster samples, echo=FALSE}
+```{r chunk14  TE signature validation KAPS analysis to cluster samples, echo=FALSE}
 # need to have a dataframe with time, status, and covariates
 # covariates are log2CPM of surv TEs
 # re-construct survdata for kaps
