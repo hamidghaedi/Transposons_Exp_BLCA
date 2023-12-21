@@ -1,25 +1,25 @@
 ---
-title: "TE expression Dec,2023"
-author: "Hamid Ghaedi"
+title: "Transposable element expression in TCGA-BLCA"
+author: "Hamid Ghaedi, Andrew Garvin"
 date: "2023-12-01"
 output: html_document
 ---
 
-
 ```{r setup, include=TRUE, cache = FALSE, echo=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-knitr::opts_knit$set(root.dir = "C:/Users/qaedi/OneDrive - Queen's University/Documents")
+knitr::opts_knit$set(root.dir = "G:/LINE1-BLCA/")
 # work from Home Station
-root_path = "C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/"
+#root_path = "C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/"
 # work from Work Station
 root_path = "G:/LINE1-BLCA/"
 
 ```
 
-## Basic statistics on RNA-seq read counts
-Previous reports suggest that ~1% of all RNA-seq read counts map to the TE elements in cancer samples. Since BLCA suggested to be one of the malignancies which shows global increase in TE element expression, total number of reads map to TE element in this cancer should be more than 1%. 
+## 1. Basic statistics
 
-```{r chunk2 libraries and helper functions, echo=FALSE}
+Previous reports suggest that \~1% of all RNA-seq read counts map to the TE elements in cancer samples. Since BLCA suggested to be one of the malignancies which shows global increase in TE element expression, total number of reads map to TE element in this cancer should be more than 1%.
+
+```{r chunk2 libraries and helper functions, echo=FALSE, include=FALSE}
 # libs
 suppressWarnings(library(kableExtra))
 suppressWarnings(library(magrittr))
@@ -28,9 +28,11 @@ suppressWarnings(library(survival))
 suppressWarnings(library(survminer))
 suppressWarnings(library(tidyverse))
 suppressWarnings(library(GSVA))
-library(DESeq2)
-library(org.Hs.eg.db)
-library(progress)
+suppressWarnings(library(DESeq2))
+suppressWarnings(library(org.Hs.eg.db))
+suppressWarnings(library(progress))
+suppressWarnings(library(PerformanceAnalytics))
+suppressWarnings(library(glmnet))
 
 # obtaining required objects :
 # 1. sample name mapping object ------------------------------------------------------------
@@ -122,7 +124,6 @@ for (mtx in preProc_matx) {
 }
 ```
 
-
 ```{r chunk4 reading data2, echo=FALSE}
 
 # About TCGA barcode 
@@ -208,9 +209,15 @@ PercentTE_count = c(PercentTECountNorm,PercentTECountTumor, PercentTECountAll)
 
 res = data.frame(Sample = Sample,
                  Avg.RNA_reads_M = round(librarySize/1000000,2),
-                 Avg.TE_count_K =round(AverageTE_count/1000000,2),
-                 Avg.Gene_count_K = round(AverageGene_count/1000000,2),
+                 Avg.TE_count_M =round(AverageTE_count/1000000,2),
+                 Avg.Gene_count_M = round(AverageGene_count/1000000,2),
                  PercentTE_count = PercentTE_count)
+
+# res = data.frame(Sample = Sample,
+#                  Avg.RNA_reads = round(librarySize),
+#                  Avg.TE_count =round(AverageTE_count),
+#                  Avg.Gene_count = round(AverageGene_count),
+#                  PercentTE_count = PercentTE_count)
 
 
 res %>%
@@ -219,10 +226,10 @@ res %>%
   kable_classic(full_width = F, html_font = "Cambria")
 
 ```
-## TE expression considering their loci 
+
+#### 1.1 TE expression considering their loci
 
 TE elements scattered through the genome and can be find as inter-genic or itra-genic elements. Further in a gene domain, TE can be found either in exons (exonic TE) or introns (intronic TE). Classifying TE elements into these three groups can help to distinguish autonomous TE expression from co-expression with host genes or intron retention.
-
 
 ```{r chunk5 reading data loci-wise, echo=FALSE}
 # exonicTE count all  samples, echo=FALSE
@@ -259,7 +266,7 @@ AverageTE_count = c(avgExTeCountAll,avgIntroTeCountAll, avgIntGenTeCountAll)
 PercentTE_count = c(PercentExTECountAll,PercentIntroTECountAll, PercentIntGenTECountAll)
 
 res = data.frame(TE_type = TE_type,
-                 AverageCount = round(AverageTE_count/1000000,2),
+                 AverageCount_M = round(AverageTE_count/1000000,2),
                  PercentTE_count = PercentTE_count)
 
 
@@ -270,10 +277,11 @@ res %>%
 
 ```
 
-## TE expression count considering family/class
+#### 1.2 TE expression count considering family/class
+
 TEs have five different classes: LINE, SINE, long terminal repeats (LTR), SVA, and DNA transposons. We want to know which class/family has expression in BLCA.
-  
-```{r chunk6 subfamily/family/class, echo=FALSE}
+
+```{r chunk6 subfamily/family/class, echo=FALSE, include=FALSE}
 
 # create a dataframe to visulaize 
 unique_te_rmk <- unique(te_rmk[,3:5]) # the number of rows here are > 1052 , means some elements were assigned to more than one repFamily
@@ -309,14 +317,43 @@ cln <- c("Exonic TEs(all samples)", "Exonic TEs(NT samples)","Exonic TEs(TP samp
          "Intergenic TEs(all samples)", "Intergenic TEs(NT samples)","Intergenic TEs(TP samples)",
          "Intronic TEs(all samples)", "Intronic TEs(NT samples)","Intronic TEs(TP samples)")
 
+
+res <- res[,c(1,7,4)]
+cln <- c("Exonic", "Intronic", "Intergenic")
+
+```
+
+```{r chunk6 subfamily/family/class vis, echo=FALSE}
 res %>%
   kable(format = "html", col.names = cln) %>%
   kable_styling() %>%
   kable_classic(full_width = F, html_font = "Cambria")
-
 ```
 
-```{r chunk7  TE signature development survival analysis at repName level, echo=FALSE}
+## 2. Steps in TE signature development.
+
+In order to develop a TE signature, we followed the steps outlined below:
+
+(I) Feature selection (FS).
+
+(II) TE Signature development.
+
+(III) Signature validation
+
+#### 2.1 Feature selection (FS)
+
+
+To select TEs for use in signature development, we were interested in a set of TEs whose expression levels were significantly associated with OS probability and also show strong correlation with at least one molecular phenotype of interest.
+
+##### 2.1.1 Significantly associated with overall survival probability (OS)
+
+Through fitting a univariate Cox regression model to the data we defined survival-associated TEs, as TEs with a p-value < 0.05, with a false discovery rate set at 5%. We found 270 such TEs from 23 repFamilies
+
+**Note**
+
+Since the expression data were categorized into low and high expression, the Cox model considers 'highExp' as the reference level, and the provided Hazard Ratio (HR) is related to the 'low-exp' category compared to the reference level. So a Hazard Ratio (HR) smaller than 1 indicates 'low-exp' group compared to the reference group has smaller HR. So for that given gene, increase in expression (highExp category) will have unfavorable effect on OS.
+
+```{r chunk7  TE signature development survival analysis at repName level, echo=FALSE, include=FALSE}
 # expression data normalization
 ## set order as in expression matrix
 clin <- clinical_data[colnames(RE_intergenic_1_raw_counts) ,]
@@ -332,7 +369,7 @@ dge <- calcNormFactors(dge, method = "RLE")
 # Obtain log2CPM with a prior count of 5
 prior_count <- 5
 log2CPM <- cpm(dge, prior.count = prior_count, log = TRUE)
-saveRDS(log2CPM, "te_cpm.RDS")
+#saveRDS(log2CPM, "te_cpm.RDS")
 
 # Now log2CPM contains the normalized expression values with log2 transformation and prior count
 # You can access the normalized data using log2CPM$table
@@ -343,9 +380,9 @@ expMat_tcga_intergenic_logCPM <- expMat_tcga_intergenic_logCPM[rownames(clinical
 
 # performing surv analysis 
 surv_summary <- survAnalysisOnExpMat(expressionMatrix = log2CPM, 
-                                     clinicalData = clinical_data,
+                                     clinicalData = clin,
                                      timeColumn ="paper_Combined.days.to.last.followup.or.death",
-                                      eventColumn = "vital_status")
+                                      eventColumn = "paper_Vital.status")
 
 # Selected TEs
 table(surv_summary$FDR <= 0.05)
@@ -357,12 +394,37 @@ surv_tes_fdr_0.05 <- surv_summary$var_name[surv_summary$FDR <= 0.05]
 dedup_intergenicTE_rmk <- intergenicTE_rmk[!duplicated(intergenicTE_rmk$RepName),]
 
 tmp <- left_join(surv_summary, dedup_intergenicTE_rmk, by = c("var_name" = "RepName"))
+
+# for vis
+vis_dat = tmp
+vis_dat$repFamily <- gsub("\\?", "", vis_dat$repFamily)
+
+# Since data are categirize into low and high expression, coc consider lowExp as refrence level and the provided HR is related to the low-exp catgory, so HR >= 1, inocate hazard ratio for lowExp group. On the other hand when HR is < 1 for lowExp group, increase in expression of that gene has unfavorable effect
+
+vis_dat <- vis_dat %>%
+  filter(FDR <= 0.05) %>%
+  mutate(Effect = ifelse(Hazard_Ratio < 1, "Unfavorable", "favorable")) %>%
+  group_by(repFamily, Effect) %>%
+  summarize(
+    TE_count = n(),
+    repNames = paste(var_name, collapse = ", ")
+  ) %>%
+  ungroup() 
+
 #
 tmp <- tmp[tmp$var_name %in% surv_tes_fdr_0.05, ]
 
 ```
 
-```{r chunk8  TE signature development survival analysis at repFamily level, echo=FALSE}
+```{r chunk7  TE signature development survival analysis at repName level vis, echo=FALSE}
+vis_dat[1:9,] %>%
+  kable(format = "html") %>%
+  kable_styling() %>%
+  kable_classic(full_width = F, html_font = "Cambria") %>%
+  add_header_above(c("TEs associated with survival probability (#repName= 270, #repFamily = 37)" = 4))
+```
+
+```{r chunk8  TE signature development FS-I: survival analysis at repFamily level, echo=FALSE, include=FALSE}
 # This chunk analysis was performed with thoe hope that we can see that when surv associated TEs are at repFamily level,still they show significant association with survival. 
 
 sigTE_log2CPM <- log2CPM[rownames(log2CPM) %in% surv_tes_fdr_0.05,]
@@ -404,11 +466,15 @@ table(tmp$repFamily, tmp$surv_associated)
 # save family with at least one surv associated TEs
 sigFamTE <- unique(tmp$repFamily[tmp$surv_associated=="survTE"])
 
-
-
 ```
 
-```{r chunk9  TE signature development  gene sig cor with TEs, echo=FALSE}
+##### 2.1.2 TEs significantly correlated with intrested phenotype
+
+We considered a TE to be correlated with the molecular phenotype of interest if a significant correlation, defined as |Pearson correlation coefficient| ≥ 0.4 at a FDR as 5%, could be established between the expression level of that TE and at least one of the bladder epithelial differentiation signatures (John P. Sfakianos et al.), immune infiltration signatures (Combes et al. and Immport db), and chromatin-modifying gene regulon signatures (IntAct and String db).
+
+We identified a total of 185 TEs correlated with interested molecular phenotype.
+
+```{r chunk9  TE signature development  FS-II: gene sig cor with TEs, echo=FALSE}
 
 # What to choose as TE expression set:
 # 0 all TEs
@@ -422,7 +488,7 @@ sig_TEs_fam <- t(TE_fam_expMat_logCPM)
 #____________________________________GSVA___COR______survTEs___________________________________#
 # TEs need to be grouped at repFamily level for correlation analysis
 
-## for GVSA analysis we use master gene list 
+## for GVSA analysis we use master gene list
 master_geneList <- readRDS(paste0(root_path, "r_objects/master_gene_list.RDS"))
 
 # an index to select gene list of intrest
@@ -432,30 +498,30 @@ sub_master_geneList <- master_geneList[1:80]
 
 ## normalizing expression matrix
 
-# exp matrix
-data <- round(GENE_1_raw_counts)
-data <- data.frame(data[, rownames(clinical_data)])
-
-# convert rownames from ENsembl to Gene symbol
-ens2symbol <- AnnotationDbi::select(org.Hs.eg.db,
-                                    key=rownames(data),
-                                    columns="SYMBOL",
-                                    keytype="ENSEMBL")
-ens2symbol <- ens2symbol[ens2symbol$ENSEMBL %in% rownames(data),]
-ens2symbol <- left_join(ens2symbol, data.frame(ENSEMBL = rownames(data),ROWNAME = rownames(data) ))
-ens2symbol <- ens2symbol[!duplicated(ens2symbol$ROWNAME),]
-
-# collapse rows with same name
-data$ENSEMBL <- rownames(data)
-# left join
-data <- left_join(data, ens2symbol)
-# drop unnecessary columns
-data <- data[, -which(colnames(data) %in% c("ENSEMBL", "ROWNAME"))]
+# # exp matrix
+# data <- round(GENE_1_raw_counts)
+# data <- data.frame(data[, rownames(clinical_data)])
+# 
+# # convert rownames from ENsembl to Gene symbol
+# ens2symbol <- AnnotationDbi::select(org.Hs.eg.db,
+#                                     key=rownames(data),
+#                                     columns="SYMBOL",
+#                                     keytype="ENSEMBL")
+# ens2symbol <- ens2symbol[ens2symbol$ENSEMBL %in% rownames(data),]
+# ens2symbol <- left_join(ens2symbol, data.frame(ENSEMBL = rownames(data),ROWNAME = rownames(data) ))
+# ens2symbol <- ens2symbol[!duplicated(ens2symbol$ROWNAME),]
+# 
+# ## collapse rows with same name
+# data$ENSEMBL <- rownames(data)
+# ## left join
+# data <- left_join(data, ens2symbol)
+# ## drop unnecessary columns
+# data <- data[, -which(colnames(data) %in% c("ENSEMBL", "ROWNAME"))]
 # If there are duplicates, calculate the mean
-# df <- data %>% 
+# df <- data %>%
 #   group_by(SYMBOL) %>%
-#   summarise_all(mean) 
-# # 
+#   summarise_all(mean)
+# #
 # data <- data.frame(df)
 # rm(df)
 # # setting rowname
@@ -466,7 +532,7 @@ data <- data[, -which(colnames(data) %in% c("ENSEMBL", "ROWNAME"))]
 # data <- data[, -which(names(data) == "SYMBOL")]
 # # replace dots with "-"
 # colnames(data) = gsub('[.]', "-", colnames(data))
-# # 
+# #
 # data <- round(data)
 
 
@@ -482,16 +548,16 @@ data.vst <- readRDS(paste0(root_path,"r_objects/vst_normalized_all_gene_expMat_t
 
 # running GSVA
 # data.gsva <- gsva(data.vst,
-#                   master_geneList, # Running only on a subset of the gene list 
+#                   master_geneList, # Running only on a subset of the gene list
 #                   mx.diff=FALSE,
 #                   verbose=TRUE,
 #                   min.sz=3,
 #                   max.sz=500,
 #                   method= "ssgsea",
-#                   kcdf="Poisson") 
+#                   kcdf="Poisson")
 #
 #saveRDS(data.gsva, "C:/Users/qaedi/OneDrive - Queen's #University/Documents/LINE1-BLCA/r_objects/data.gsva_3k_pathways.RDS")
-# load 
+# load
 
 data.gsva <- readRDS(paste0(root_path, "r_objects/data.gsva_3k_pathways.RDS"))
 # transpose dataframe
@@ -508,10 +574,15 @@ data.gsva <- data.frame(t(data.gsva))
 data.gsva <- data.gsva[rownames(sig_TEs),]
 #data.gsva <- data.gsva[rownames(sig_TEs_fam),]
 
-# correlation 
-cor_all_TE_repName_gsva <- correlateMatrix(all_TEs, data.gsva[, c(1:77)]) #77 selected pathways
-cor_sig_TE_repName_gsva <- correlateMatrix(sig_TEs, data.gsva[, c(1:77)]) #77 selected pathways
-cor_sig_TE_repFamily_gsva <- correlateMatrix(sig_TEs_fam, data.gsva[, c(1:77)]) #77 selected pathways
+# correlation
+#cor_all_TE_repName_gsva <- correlateMatrix(all_TEs, data.gsva[, c(1:77)]) #77 selected pathways
+#cor_sig_TE_repName_gsva <- correlateMatrix(sig_TEs, data.gsva[, c(1:77)]) #77 selected pathways
+#cor_sig_TE_repFamily_gsva <- correlateMatrix(sig_TEs_fam, data.gsva[, c(1:77)]) #77 selected pathways
+
+# saving and loading
+#save(cor_all_TE_repName_gsva, cor_sig_TE_repName_gsva, file= "r_objects/correlation_TES_with_GSVA.RData")
+load("G:/LINE1-BLCA/r_objects/correlation_TES_with_GSVA.RData")
+
 # saveRDS
 #saveRDS(cor_TE_repName_gsva, "cor_TE_repName_gsva.RDS")
 
@@ -520,9 +591,33 @@ filtCor_all_TE_repName_gsva <- cor_all_TE_repName_gsva[abs(cor_all_TE_repName_gs
 
 # sig TEs
 filtCor_sig_TE_repName_gsva <- cor_sig_TE_repName_gsva[abs(cor_sig_TE_repName_gsva$correlation_coefficient) >= 0.4 & cor_sig_TE_repName_gsva$FDR < 0.05, ]
+
 cor_all_TE_repName_gsva<- unique(filtCor_all_TE_repName_gsva$var1)
 # count number of TES
 overlap_cor_sig_allTEs_surv_tes_fdr_0.05 <- unique(filtCor_all_TE_repName_gsva$var1[filtCor_all_TE_repName_gsva$var1 %in% surv_tes_fdr_0.05])
+
+# fir visualization
+  
+vis_dat <- filtCor_all_TE_repName_gsva %>%
+  group_by(var1) %>%
+  summarize(
+    TE = unique(var1),
+    Correlated_Pheno_Number = n(),
+    Phenotype = paste(var2, collapse = ", ")
+  ) %>%
+  dplyr::select(TE, Correlated_Pheno_Number, Phenotype) %>%
+  arrange(desc(Correlated_Pheno_Number))
+
+vis_dat[1:5,] %>%
+  kable(format = "html") %>%
+  kable_styling() %>%
+  kable_classic(full_width = F, html_font = "Cambria") %>%
+  add_header_above(c("TEs correlated with molecular phenotypes (n = 185)" = 3))
+```
+
+Furthermore, we included StromalScore and ImmuneScore obtained from the ESTIMATE algorithm, along with additional phenotypes from [Chen et al, Front. Immunol., 15 April 2021](https://www.frontiersin.org/articles/10.3389/fimmu.2021.672158/full) , in the correlation analysis. This was done to potentially increase the overlap between survival-associated TEs and TEs correlated with molecular phenotypes. A total of 59 TEs have been identified as being associated  with survival probability and strongly correlated with molecular phenotypes:
+
+```{r chunk9  TE signature development  FS-II: ESTIMATE TME sig cor with TEs, echo=FALSE, include=FALSE}
 
 #____________________________________ESTIMATE___COR______survTEs___________________________________
 
@@ -534,7 +629,7 @@ estDat = read.csv(paste0(root_path, "estimateScoreTCGA.csv"))
 tmeDat = read.csv(paste0(root_path, "tmeScoreTCGA.csv"))
 estDattmeDat <- dplyr::left_join(estDat, tmeDat)
 # drop rows with NA
-estDattmeDat <- estDattmeDat[!is.na(rownames(estDattmeDat)),]
+#estDattmeDat <- estDattmeDat[!is.na(rownames(estDattmeDat)),]
 
 # drop ID column from estDaand ..
 rownames(estDattmeDat) <- estDattmeDat$ID
@@ -565,10 +660,23 @@ cor_all_TE_repName_estTME <- unique(filtCor_all_TE_repName_estTE$var1)
 
 # Add Tes to the selected list of TEs
 overlap_cor_sig_allTEs_surv_tes_fdr_0.05 <- surv_tes_fdr_0.05[surv_tes_fdr_0.05 %in% unique(c(cor_all_TE_repName_gsva, cor_all_TE_repName_estTME))]
+#
+print(overlap_cor_sig_allTEs_surv_tes_fdr_0.05)
 
 ```
 
-## TE signature development uisng GSVA approach
+#### 2.2 TE Signature development
+
+To develop the score, we employed a non-parametric, unsupervised approach for calculating enrichment scores in individual samples, as described in Gene Set Variation Analysis (GSVA) documentation. We have considered different approaches in developing the signature score: 
+
+1- We included all the features selected in the feature selection (FS) step, naming the resulting signature "all_59_TEs" signature score.
+
+2- We categorized the initially selected TEs into those with a favorable and unfavorable effect on overall survival  and  developed "TE_signature_favorableOS" and "TE_signature_UnfavorableOS" scores. 
+
+3- We grouped the selected TEs into three categories based on their expression profile similarity, followed by hierarchical clustering ("TE_Corsignature_1", "TE_Corsignature_2" and "TE_Corsignature_3"). See below for the clusters.
+
+
+
 ```{r chunk10  TE signature development using GSVA , echo=FALSE}
 
 ## APPROACH 1 : USING GSVA and then validating using cor and regression
@@ -576,7 +684,7 @@ overlap_cor_sig_allTEs_surv_tes_fdr_0.05 <- surv_tes_fdr_0.05[surv_tes_fdr_0.05 
 # we may consider the following TEs as gene list to develop a TE signature score:
 
 #____________ 1 full set of TEs
-overlap_cor_sig_allTEs_surv_tes_fdr_0.05 # overlap between all TEs significantly associated gsva with Surv TEs
+#overlap_cor_sig_allTEs_surv_tes_fdr_0.05 # overlap between all TEs significantly associated gsva with Surv TEs
 
 #_____________ 2 Split by cor test + clustering result
 corDat <- t(log2CPM)
@@ -590,7 +698,7 @@ dist_matrix <- as.dist(1 - corDat)
 # Perform hierarchical clustering
 hc <- hclust(dist_matrix, method = "complete")
 # visualization:
-plot(hc, main = "Hierarchical Clustering Dendrogram", xlab = "Variables", sub = NULL, cex = 0.6)
+plot(hc, main = "Clusters of TEs", xlab = "", sub = NULL, cex = 0.6)
 # Optionally, add labels to the branches
 labels <- cutree(hc, h = 1.3)
 rect.hclust(hc, k = 3, border = 2:4)  # Adjust the number of rectangles based on your needs
@@ -601,18 +709,21 @@ text(hc$height[which(labels == 3)], labels[labels == 3], labels[labels == 3], po
 groups <- split(names(labels), labels)
 
 #______________ 3 Split by HR > 1 and HR <1 
-#"TE_signature_favorableOS" = surv_summary$var_name[surv_summary$var_name %in% overlap_cor_sig_allTEs_surv_tes_fdr_0.05 & surv_summary$Hazard_Ratio < 1],
-#"TE_signature_UnfavorableOS" = surv_summary$var_name[surv_summary$var_name %in% overlap_cor_sig_allTEs_surv_tes_fdr_0.05 & surv_summary$Hazard_Ratio > 1]
+TE_signature_favorableOS = surv_summary$var_name[surv_summary$var_name %in% overlap_cor_sig_allTEs_surv_tes_fdr_0.05 & surv_summary$Hazard_Ratio > 1]
+
+TE_signature_UnfavorableOS = surv_summary$var_name[surv_summary$var_name %in% overlap_cor_sig_allTEs_surv_tes_fdr_0.05 & surv_summary$Hazard_Ratio < 1]
 
 #________________ putting all in a gene list  
-TE_geneList <- list("all_60_TEs" = overlap_cor_sig_allTEs_surv_tes_fdr_0.05,
-                    "TE_signature_favorableOS" = surv_summary$var_name[surv_summary$var_name %in% overlap_cor_sig_allTEs_surv_tes_fdr_0.05 & surv_summary$Hazard_Ratio < 1],
-                    "TE_signature_UnfavorableOS" = surv_summary$var_name[surv_summary$var_name %in% overlap_cor_sig_allTEs_surv_tes_fdr_0.05 & surv_summary$Hazard_Ratio > 1],
+TE_geneList <- list("all_59_TEs" = overlap_cor_sig_allTEs_surv_tes_fdr_0.05,
+                    "TE_signature_favorableOS" = TE_signature_favorableOS,
+                    "TE_signature_UnfavorableOS" = TE_signature_UnfavorableOS,
                     "TE_Corsignature_1" = groups[[1]],
                     "TE_Corsignature_2" = groups[[2]],
                     "TE_Corsignature_3" = groups[[3]])
 
+```
 
+```{r chunk10  TE signature development using GSVA vis , echo=FALSE, include=FALSE}
 # use the TE_geneList to define TE signatures
 TE_signatureScore_gsva <- t(gsva(log2CPM, TE_geneList, 
                           min.sz=1,
@@ -621,50 +732,20 @@ TE_signatureScore_gsva <- t(gsva(log2CPM, TE_geneList,
                             kcdf="Gaussian"))
 
 ```
-## TE signature development uisng LASSO regression model
 
-```{r chunk11  TE signature development using LASSO , echo=FALSE}
+4- We applied LASSO regression to the selected TEs to further limit the number of TEs to be included in signature development ("LASSOsigScore")
+
+
+```{r chunk11  TE signature development using LASSO , echo=FALSE, include=FALSE}
 ## APPROACH 2 : USING LASSO regression model to develop the signature
-survData <- data.frame(
-    barcode = clinical_data$barcode,
-    event = ifelse(clinical_data$paper_Vital.status == "Alive", 0,
-                     ifelse(clinical_data$paper_Vital.status == "Dead", 1, NA)),
-    time = as.numeric(clinical_data$paper_Combined.days.to.last.followup.or.death))
-
-tmp <- t(log2CPM[rownames(log2CPM) %in% overlap_cor_sig_allTEs_surv_tes_fdr_0.05,])
-# set order
-tmp <- tmp[survData$barcode,]
-# confirm order
-all(rownames(tmp)==survData$barcode)
-#
-lassoDat <- cbind(survData, tmp)
-lassoDat <- lassoDat[, -1]
-
-#
-
-```
-## TE signature development uisng PCA  (defining a meta gene per sample)
-
-```{r chunk12  TE signature development using PCA , echo=FALSE}
-## APPROACH 2 : USING LASSO regression model to develop the signature
-library(BhGLM)
-
-# lets define group of TEs based on their HR
-surv_summary$HRgroup <- as.character(cut(surv_summary$Hazard_Ratio,
-                            breaks = c(0.40,  0.70, 1.20, 3),
-                            labels = c("UnFav","NotSig", "Fav")))
+library(glmnet)
+# details available at : https://glmnet.stanford.edu/articles/Coxnet.html
 
 
-survGroup <- surv_summary[surv_summary$var_name %in% overlap_cor_sig_allTEs_surv_tes_fdr_0.05,]
-# create list in needed format
-survGroupList <- survGroup %>%
-  group_split(HRgroup, keep = FALSE) %>%
-  setNames(unique(survGroup$HRgroup)) %>%
-  lapply(function(df) df$var_name)
 # survdata
 survData <- data.frame(
     barcode = clinical_data$barcode,
-    event = ifelse(clinical_data$paper_Vital.status == "Alive", 0,
+    status = ifelse(clinical_data$paper_Vital.status == "Alive", 0,
                      ifelse(clinical_data$paper_Vital.status == "Dead", 1, NA)),
     time = as.numeric(clinical_data$paper_Combined.days.to.last.followup.or.death))
 
@@ -672,64 +753,182 @@ survData <- data.frame(
 survData <- survData[!is.na(survData$time) & survData$time > 0, ]
 
 
-
 tmp <- t(log2CPM[rownames(log2CPM) %in% overlap_cor_sig_allTEs_surv_tes_fdr_0.05,])
 # set order
-tmp <- data.frame(tmp[survData$barcode,])
+tmp <- as.matrix(tmp[survData$barcode,])
 # confirm order
 all(rownames(tmp)==survData$barcode)
 
 #
-#  Fit Bayesian Spike-and-Slab Lasso Model:
-y <- Surv(survData$time, survData$event)
-# set group
-group <-survGroupList
+#  Fit cox - baseline
+# create y:
+y <- Surv(survData$time, survData$status)
+
+fit <- glmnet(tmp, y, family = "cox", alpha = 1) # alpha as 1, LASSO, 0.5 ElasticNet, 0 ridge
+# vis
+plot(fit)
 
 
-# Fit Bayesian Cox Proportional Hazards Model
-f2 <- bmlasso(x = tmp, y = y, family = "cox", ss = c(0.04, 0.5), group = group)
-#
+#Cross-validation
+set.seed(1)
+cvfit <- cv.glmnet(tmp, y, family = "cox", type.measure = "C")
+# vis
+plot(cvfit)
+#As with other families, the left vertical line in our plot shows us where the CV-error curve hits its minimum. The right vertical line shows us the most regularized model with CV-error within 1 standard deviation of the minimum. We also extract such optimal λ s:
+lambda <- cvfit$lambda.min
+# the most regularized model with CV-error within 1 SD of the minimum  λ
+cvfit$lambda.1se
+#  extract the coefficients at certain values of λ
+# to store the coef
+coef_mtx <-coef(fit, s = lambda)
+# Extract coefficients and non-zero variables
+coef_df <- data.frame(TE = coef_mtx@Dimnames[[1]][coef_mtx@i],
+                     coefs = coef_mtx@x)
+
+
+# 
+# 
+# 
+# # Running the LASSO on all expression matrix 
+# tmp <- t(log2CPM)
+# # set order
+# tmp <- as.matrix(tmp[survData$barcode,])
+# # confirm order
+# all(rownames(tmp)==survData$barcode)
+# 
+# fit <- glmnet(tmp, y, family = "cox", alpha = 1) # alpha as 1, LASSO, 0.5 ElasticNet, 0 ridge
+# cvfit <- cv.glmnet(tmp, y, family = "cox", type.measure = "C")
+# lambda <- cvfit$lambda.min
+# # to store the coef
+# coef_mtx <-coef(fit, s = lambda)
+# 
+# 
+# 
+# 
+# # Extract coefficients and non-zero variables
+# coef_df <- data.frame(non_zero_vars = coef_mtx@Dimnames[[1]][coef_mtx@i],
+#                       non_zero_coefs = coef_mtx@x)
+# 
+# 
+# 
+# 
+# 
+# # To run all regularization and comparing the results:
+# # Assuming x and y are your input data
+# fit_lasso <- glmnet(tmp, y, family = "cox", alpha = 1)  # LassO
+# fit_ridge <- glmnet(tmp, y, family = "cox", alpha = 0)  # Ridge
+# fit_elastic <- glmnet(tmp, y, family = "cox", alpha = 0.5)  # Elastic Net
+# 
+# # Extract coefficients at a specific value of lambda (e.g., minimum lambda)
+# coef_lasso <- coef(fit_lasso, s = lambda)
+# coef_lasso_df <- data.frame(vars = coef_lasso@Dimnames[[1]][coef_lasso@i], LASSO_coefs = coef_lasso@x)
+# coef_ridge <- coef(fit_ridge, s = lambda)
+# coef_ridge_df <- data.frame(vars = coef_ridge@Dimnames[[1]], Ridge_coefs = coef_ridge@x)
+# coef_elastic <- coef(fit_elastic, s = lambda)
+# coef_elastic_df <- data.frame(vars = coef_elastic@Dimnames[[1]][coef_elastic@i], Elastic_coefs = coef_elastic@x)
+# 
+# # putting all result in one df
+# allReg_coef <- full_join(coef_lasso_df, coef_ridge_df)
+# allReg_coef <- full_join(allReg_coef, coef_elastic_df)
+#__________________________________________________SCORE calculation_______________________________#
+
+tmp <- log2CPM %>%
+  as.data.frame() %>%
+  t() %>%
+  subset(select = coef_df$TE)
+
+# multiply expression scores by coefs
+for(i in 1:ncol(tmp)){
+  tmp[,i] <- tmp[,i]*coef_df$coefs[coef_df$TE==colnames(tmp)[i]]
+}
+
+TE_signatureScore_lasso = data.frame(LASSOsigScore = rowSums(tmp))
 
 ```
-## Validation of TE sigs:
-The validation can be done through two different approaches: (1) Examining the correlation between TE sig and interesting phenotypes (ssGSEA, CIBERSORT, ESTIMATE, xCell, Regulon score and etc ...) and (2) through KAPS algorithm
 
-### (1) Examining the correlation between TE sig and interesting phenotypes
+```{r chunk11  TE signature development using LASSO vis, echo=FALSE}
+coef_df %>%
+  kable(format = "html") %>%
+  kable_styling() %>%
+  kable_classic(full_width = F, html_font = "Cambria") %>%
+  add_header_above(c("TEs and their LASSO coefficients to predict OS" = 2))
+
+```
+
+The developed signatures show different level of correlation with each other:
+
+```{r chunk13  TE signature validation correlation, echo=FALSE}
+
+# create one df for all sigscores
+sigScore <- merge(TE_signatureScore_gsva, TE_signatureScore_lasso, by = "row.names", all = TRUE)
+# Reset row names
+rownames(sigScore) <- sigScore$Row.names
+sigScore <- sigScore[, -1]
+
+
+# Calculate the correlation matrix
+#cor_matrix <- cor(sigScore)
+# Visualize the correlation matrix using corrplot
+#corrplot(cor_matrix, method = "color", type = "upper", tl.col = "black", tl.srt = 45)
+
+chart.Correlation(R = as.matrix(sigScore), histogram=TRUE)
+
+```
+
+
+#### 2.3 Signature validation:
+
+The validation process can be conducted using different approaches: (1) examining the correlation between the TE signatures and relevant phenotype using methods such as ssGSEA, CIBERSORT, ESTIMATE, xCell, Regulon score, etc., and (2) employing the KAPS algorithm.
+
 
 ```{r chunk13  TE signature validation , echo=FALSE}
+# create one df for all sigscores
+sigScore <- merge(TE_signatureScore_gsva, TE_signatureScore_lasso, by = "row.names", all = TRUE)
+# Reset row names
+rownames(sigScore) <- sigScore$Row.names
+sigScore <- sigScore[, -1]
+# reset rownames order
+
+sigScore <- sigScore[rownames(data.gsva),]
+
 # correlation with gene sets
 # 1___________ What ever present in master_genlist 3k
+cor_TE_sigScore_gsva <- correlateMatrix(sigScore, data.gsva[, c(1:77)]) #77 selected pathways
 
-cor_TE_sigScore_gsva <- correlateMatrix(TE_signatureScore, data.gsva[, c(1:77)]) #77 selected pathways
-#
-tmp_TE_signatureScore <- TE_signatureScore[rownames(data.gsva),]
-# correlation
-cor_TE_sigScore_gsva <- correlateMatrix(TE_signatureScore, data.gsva[, c(1:77)]) #77 selected pathways
+# significant cor:
+filt_cor_TE_sigScore_gsva <- cor_TE_sigScore_gsva[abs(cor_TE_sigScore_gsva$correlation_coefficient) >= 0.4 & 
+                                                    cor_TE_sigScore_gsva$FDR <= 0.05,]
+
 
 # 2________CIBERSORT deconv. immune cell types: https://bmccancer.biomedcentral.com/articles/10.1186/s12885-022-09794-9 Table S4
 cibersortDAt <- readRDS(paste0(root_path, "r_objects/cibersortDAt.RDS"))
 #
-all(rownames(TE_signatureScore) %in% rownames(cibersortDAt))
+all(rownames(sigScore) %in% rownames(cibersortDAt))
 #
-cibersortDAt <- cibersortDAt[rownames(TE_signatureScore),]
+cibersortDAt <- cibersortDAt[rownames(sigScore),]
 #
-all(rownames(TE_signatureScore)==rownames(cibersortDAt))
+all(rownames(sigScore)==rownames(cibersortDAt))
 # perform correlation analysis 
-cor_TE_sigScore_cibersort <- correlateMatrix(TE_signatureScore, cibersortDAt)
+cor_TE_sigScore_cibersort <- correlateMatrix(sigScore, cibersortDAt)
+filt_cor_TE_sigScore_cibersort <- cor_TE_sigScore_cibersort[abs(cor_TE_sigScore_cibersort$correlation_coefficient) >= 0.4 & 
+                                                    cor_TE_sigScore_cibersort$FDR <= 0.05,]
+
 # 3- ESTIMATE + TME
-estDattmeDat <- estDattmeDat[!is.na(rownames(estDattmeDat)),]
-
-estDattmeDat <- estDattmeDat[rownames(estDattmeDat) %in% rownames(TE_signatureScore),]
+tmp <- sigScore
+rn <- substr(rownames(tmp),1,15)
+tmp <- tmp[ !duplicated(rn),]
+rownames(tmp) <- rn[!duplicated(rn)]
+# filter based on the target df
+tmp <- tmp[rownames(tmp) %in% rownames(estDattmeDat),]
+# re-setting row order
+estDattmeDat <- estDattmeDat[rownames(tmp),]
 #
-estDattmeDat <- cibersortDAt[rownames(tmp_TE_signatureScore),]
 #
-tmp_TE_signatureScore <- TE_signatureScore[rownames(estDattmeDat), ]
-
-all(rownames(tmp_TE_signatureScore)==rownames(estDattmeDat))
+all(rownames(tmp)==rownames(estDattmeDat))
 # perform correlation analysis 
-cor_TE_sigScore_estTme <- correlateMatrix(tmp_TE_signatureScore, estDattmeDat)
-cor_TE_sigScore_estTme[order(abs(cor_TE_sigScore_estTme$correlation_coefficient)),]
-
+cor_TE_sigScore_estTme <- correlateMatrix(tmp, estDattmeDat)
+filt_cor_TE_sigScore_estTme <- cor_TE_sigScore_estTme[abs(cor_TE_sigScore_estTme$correlation_coefficient) >= 0.4 & 
+                                                    cor_TE_sigScore_estTme$FDR <= 0.05,]
 # 3____________ x-cell
 ##
 xcell = data.frame(data.table::fread(paste0(root_path, "xCell_TCGA_RSEM.txt")), row.names = T)
@@ -737,3801 +936,211 @@ xcell = data.frame(data.table::fread(paste0(root_path, "xCell_TCGA_RSEM.txt")), 
 colnames(xcell) = gsub('[.]', "-", colnames(xcell))
 xcell = t(xcell)
 # tmp TE sig score
-tmp_TE_signatureScore <- TE_signatureScore
-rownames(tmp_TE_signatureScore) <- substr(rownames(tmp_TE_signatureScore),1,15)
 #
-xcell <- xcell[rownames(xcell) %in% rownames(tmp_TE_signatureScore),]
-tmp_TE_signatureScore <- tmp_TE_signatureScore[rownames(tmp_TE_signatureScore) %in% rownames(xcell),]
+xcell <- xcell[rownames(xcell) %in% rownames(tmp),]
+tmp <- tmp[rownames(tmp) %in% rownames(xcell),]
 #
-tmp_TE_signatureScore <- tmp_TE_signatureScore[!duplicated(rownames(tmp_TE_signatureScore)),]
-tmp_TE_signatureScore <- tmp_TE_signatureScore[rownames(xcell),]
+tmp <- tmp[rownames(xcell),]
 #
-# correlation
-cor_TE_sigScore_xcell <- correlateMatrix(tmp_TE_signatureScore, xcell)
+all(rownames(tmp)==rownames(xcell))
 
-# 4 _______ regulon score PLACE HOLDER
+# correlation
+cor_TE_sigScore_xcell <- correlateMatrix(tmp, xcell)
+filt_cor_TE_sigScore_xcell <- cor_TE_sigScore_xcell[abs(cor_TE_sigScore_xcell$correlation_coefficient) >= 0.4 & 
+                                                        cor_TE_sigScore_xcell$FDR <= 0.05,]
+# 4 _______ regulon score 
+# RTN analysis 
+# 
+# library(RTN)
+# #library(TCGAbiolinks)
+# library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+# library(SummarizedExperiment)
+# library(snow)
+# 
+# #____________________________________obtaining Expression Matrix_____________________________________________#
+# # Gene expression data will be aligned against hg38
+# query <- GDCquery(project = "TCGA-BLCA",
+#                   data.category = "Transcriptome Profiling")
+# 
+# # to see what is avaiable 
+# blca_files <- getResults(query)
+# 
+# #
+# table(blca_files$analysis_workflow_type)
+# 
+# #BCGSC miRNA Profiling         STAR - Counts 
+# #874                   862 
+# 
+# query <- GDCquery(project = "TCGA-BLCA",
+#                   data.category = "Transcriptome Profiling",
+#                   data.type = "Gene Expression Quantification", 
+#                   workflow.type = "STAR - Counts",
+#                   sample.type = c("Primary Tumor"))
+# 
+# GDCdownload(query)
+# tcgaBLCA_mRNA_data <- GDCprepare(query)
+# |==================================================================================================|100%                      Completed after 2 m 
+# Starting to add information to samples
+# => Add clinical information to samples
+# => Adding TCGA molecular information from marker papers
+# => Information will have prefix 'paper_' 
+# blca subtype information from:doi:10.1016/j.cell.2017.09.007
+# Available assays in SummarizedExperiment : 
+#   => unstranded
+# => stranded_first
+# => stranded_second
+# => tpm_unstrand
+# => fpkm_unstrand
+# => fpkm_uq_unstrand
+# 
+# # Subset by known gene locations
+# geneRanges <- genes(TxDb.Hsapiens.UCSC.hg38.knownGene)
+# tcgaBLCA_mRNA_data <- subsetByOverlaps(tcgaBLCA_mRNA_data, geneRanges)
+# # known genes are reatined
+# nrow(rowData(tcgaBLCA_mRNA_data))
+# #[1] 37033
+# 
+# # changing column name in the coldata
+# colnames(rowData(tcgaBLCA_mRNA_data)) <- c("source","type","score","phase","ENSEMBL","gene_type","SYMBOL","level", "hgnc_id","havana_gene")
+
+# Save the preprocessed data for subsequent analyses
+#save(tcgaBLCA_mRNA_data, file = "tcgaBLCA_mRNA_data_preprocessed.RData")
+load("~/Transposons_Exp_BLCA_GitHub/RTN_files/tcgaBLCA_mRNA_data_preprocessed.RData")
+
+#_________________________________________Inferring the transcriptional regulatory network____________________________#
+# # Load TF annotation
+# data("tfsData")
+# 
+# # Check TF annotation:
+# # Intersect TFs from Lambert et al. (2018) with gene annotation 
+# # from the TCGA-BRCA cohort
+# geneannot <- rowData(tcgaBLCA_mRNA_data)
+# 
+# regulatoryElements <- intersect(tfsData$Lambert2018$SYMBOL, geneannot$SYMBOL)
+
+# ______________________prepare expDat
+# # identify duplicated gene by SYMBOL, and collapse by taking mean
+# expDat <- as.data.frame(assays(tcgaBLCA_mRNA_data)$fpkm_uq_unstrand)
+# # extract row names and remove the dot 
+# expressed_genes <- as.data.frame(rowData(tcgaBLCA_mRNA_data))
+# 
+# # extract indexec from duplicated rows
+# dup_idx <- which(duplicated(expressed_genes$SYMBOL) | duplicated(expressed_genes$SYMBOL, fromLast = TRUE))
+# # subset expression matrix 
+# dup_expDat <- expDat[dup_idx,]
+# # dup map
+# dup_map <- expressed_genes$ENSEMBL[dup_idx]
+# names(dup_map) <- expressed_genes$SYMBOL[dup_idx]
+# # Ading symbol to the data
+# dup_expDat$SYMBOL <-names(dup_map) 
+# # 
+# df <- dup_expDat %>%
+#   group_by(SYMBOL) %>%
+#   summarise_all(mean)
+# # save row names
+# RN <- df$SYMBOL
+# # set rownames
+# dup_expDat <- as.matrix(df[,-1])
+# #
+# rownames(dup_expDat) <- RN
+# 
+# # 
+# unique_expDat <- expDat[- c(dup_idx) ,]
+# unique_map <- expressed_genes$ENSEMBL[expressed_genes$ENSEMBL %in% rownames(unique_expDat)]
+# names(unique_map) <- expressed_genes$SYMBOL[expressed_genes$ENSEMBL %in% unique_map]
+# # set rownames
+# rownames(unique_expDat)= names(unique_map)
+# 
+# expDat<- as.matrix(rbind(dup_expDat, unique_expDat))
+# save(expDat, file="~/Transposons_Exp_BLCA_GitHub/RTN_files/blca_expMat_geneSymbol_inrow_fpkm_uq.RData")
+
+load("~/Transposons_Exp_BLCA_GitHub/RTN_files/blca_expMat_geneSymbol_inrow_fpkm_uq.RData") # returns expDat
+#________________________# Run the TNI constructor
+# Run the TNI constructor
+# rtni_tcgaBLCA <- tni.constructor(expData = expDat, 
+#                                  regulatoryElements = regulatoryElements)
+
+
+#________________________ Compute the reference regulatory network by permutation and bootstrap analyses.
+# Please set 'spec' according to your available hardware
+# options(cluster=snow::makeCluster(spec=8, "SOCK"))
+# rtni_tcgaBLCA <- tni.permutation(rtni_tcgaBLCA, pValueCutoff = 1e-7)
+# rtni_tcgaBLCA <- tni.bootstrap(rtni_tcgaBLCA)
+# stopCluster(getOption("cluster"))
+# 
+# # Compute the DPI-filtered regulatory network
+# rtni_tcgaBLCA <- tni.dpi.filter(rtni_tcgaBLCA, eps = 0)
+# 
+# # Save the TNI object for subsequent analyses
+# save(rtni_tcgaBLCA, file="~/Transposons_Exp_BLCA_GitHub/RTN_files/rtni_tcgaBLCA.RData")
+load("~/Transposons_Exp_BLCA_GitHub/RTN_files/rtni_tcgaBLCA.RData")
+#
+
+#____________________________Regulon activity profiles__________________________________________#
+# # A list of transcription factors of interest (here 36 risk-associated TFs)
+risk.tfs <- c("AFF3", "AR", "ARNT2", "BRD8", "CBFB", "CEBPB", "E2F2", "E2F3", "ENO1", "ESR1", "FOSL1", "FOXA1", "GATA3", "GATAD2A", "LZTFL1", "MTA2", "MYB", "MZF1", "NFIB", "PPARD", "RARA", "RB1", "RUNX3", "SNAPC2", "SOX10", "SPDEF", "TBX19", "TCEAL1", "TRIM29", "XBP1", "YBX1", "YPEL3", "ZNF24", "ZNF434", "ZNF552", "ZNF587")
+# 
+# # Compute regulon activity for individual samples
+# rtni1st <- tni.gsea2(rtni_tcgaBLCA, regulatoryElements = risk.tfs)
+# 
+# blca_regact_selected <- tni.get(rtni1st, what = "regulonActivity")
+# 
+# # Compute regulon activity for individual samples for all regulons
+# rtni1st_all <- tni.gsea2(rtni_tcgaBLCA)
+# 
+# blca_regact_all <- tni.get(rtni1st_all, what = "regulonActivity")
+# save(blca_regact_all, file="~/Transposons_Exp_BLCA_GitHub/RTN_files/blca_regact_all.RData")
+load("~/Transposons_Exp_BLCA_GitHub/RTN_files/blca_regact_all.RData")
+#
+regulon_activity <- blca_regact_all$dif
+# prepare signature score matched with regulon activity
+tmp <- sigScore[rownames(sigScore) %in% rownames(regulon_activity),]
+tmp <- tmp[rownames(regulon_activity),]
+
+all(rownames(tmp)==rownames(regulon_activity))
+# [1] TRUE
+
+# correlation
+cor_TE_sigScore_regulon <- correlateMatrix(tmp, regulon_activity)
+
+filt_cor_TE_sigScore_regulon <- cor_TE_sigScore_regulon[abs(cor_TE_sigScore_regulon$correlation_coefficient) >= 0.4 & 
+                                                        cor_TE_sigScore_regulon$FDR <= 0.05,]
+# re-order
+ord_cor_TE <- data.frame(unclass(table(filt_cor_TE_sigScore_regulon$var2,filt_cor_TE_sigScore_regulon$var1 )))
+ord_cor_TE$sigCount <- rowSums(ord_cor_TE)
+ord_cor_TE <- ord_cor_TE[order(ord_cor_TE$sigCount, decreasing = TRUE),]
 
 ```
-
 
 ```{r chunk14  TE signature validation KAPS analysis to cluster samples, echo=FALSE}
-# need to have a dataframe with time, status, and covariates
-# covariates are log2CPM of surv TEs
-# re-construct survdata for kaps
-
-overlapTE_expMat <- t(log2CPM[rownames(log2CPM) %in% overlap_cor_sig_allTEs_surv_tes_fdr_0.05,])
-# set orders
-all(rownames(overlapTE_expMat) %in% rownames(survData))
-#reorder
-overlapTE_expMat <- overlapTE_expMat[rownames(survData),]
-#
-all(rownames(overlapTE_expMat) ==rownames(survData))
-# TRUE
-
-kasps_dat <- cbind(survData[, c(2:3)], overlapTE_expMat)
-
-# Define the formula with all variables except time and status
-f <- Surv(time, event) ~ . - time - event
-
-# Apply kaps with K = 2:5
-#fit2 <- kaps(f, data = kasps_dat, K = 2:5)
-fit2 <- kaps(f, data = kasps_dat, K = 2)
-saveRDS(fit2, "kapsK2.RDS")
-fit3 <- kaps(f, data = kasps_dat, K = 3)
-saveRDS(fit3, "kapsK3.RDS")
-fit4 <- kaps(f, data = kasps_dat, K = 4)
-saveRDS(fit4, "kapsK4.RDS")
-fit5 <- kaps(f, data = kasps_dat, K = 5)
-saveRDS(fit5, "kapsK5.RDS")
-#
-
-```
-
-#### Tumor tissues (n = 21) vs. matched normal tissues (n = 19)
-
-```{r chunk22 DE preprocessing, echo=FALSE, include=FALSE}
-
-expDat = subTeExp[, colnames(subTeExp) %in% c(normBarcode,normMatechedTumorBarcode)]
-clin = clinical[clinical$barcode %in% c(normBarcode,normMatechedTumorBarcode),]
-
-# to see whether all rows of clinical are present in rna datset
-all(rownames(clin) %in% colnames(expDat))
-
-# whether they are in the same order:
-all(rownames(clin) == colnames(expDat))
-
-# if not reorder them by:
-expDat <- expDat[, rownames(clin)]
-all(rownames(clin) == colnames(expDat))
-
-```
-```{r chunk23 DE, echo=FALSE, include=FALSE}
-# include = FALSE means not any output from code in the markdown
-#________Packgaes______________#
-suppressWarnings(library("SummarizedExperiment")) # bioconductor package
-suppressWarnings(library("DESeq2")) # bioconductor package
-suppressWarnings(library("IHW")) # bioconductor package
-suppressWarnings(library("apeglm")) # bioconductor package
-suppressWarnings(library("pheatmap")) # CRAN package
-suppressWarnings(library("RColorBrewer")) # CRAN package
-suppressWarnings(library("PCAtools")) # bioconductor package
-suppressWarnings(library("reshape2")) # CRAN package
-suppressWarnings(library("dendextend"))
-suppressWarnings(library("ggplot2"))
-suppressWarnings(library("dplyr"))
-suppressWarnings(library("Seurat"))
-suppressWarnings(library("patchwork"))
-suppressWarnings(library("dittoSeq"))
-suppressWarnings(library("survival"))
-suppressWarnings(library("survminer"))
-
-
-```
-
-```{r chunk24 DE 2, echo=FALSE}
-# replace spaces with "_" in levels of definition column
-clin$definition <-  as.factor(gsub(" ", "_", clin$definition))
-# relevling factor to ensure tumors would be compared to normal tissue.
-#
-clin$definition <- relevel(clin$definition, ref = "Solid_Tissue_Normal")
-
-```
-
-## Data quality assessment and quality control
-
-Our goal is to identify  differentially expressed genes. So  we are looking in particular for samples that the data points obtained from these particular samples are detrimental to our purpose. We wil look at two analysis: **PCA** and **sample-to-sample distances** coupled with heatmap visualization to identify abnormal data points:
-
-#### PCA
-```{r chunk25 DE 3, echo=FALSE}
-# Making DESeqDataSet object which stores all experiment data
-dds <- DESeqDataSetFromMatrix(countData = round(expDat),
-                              colData = clin,
-                              design = ~ definition)
-
-# prefilteration: it is not necessary but recommended to filter out low expressed genes
-
-keep <- rowSums(counts(dds)) >= 10
-dds <- dds[keep,]
-
-# data tranfromation
-rld <- rlog(dds, blind=TRUE)
-
-# making PC object
-p <- pca(assay(rld), metadata = colData(rld), removeVar = 0.1)
-
-# create PCA plot for PCA1 and PCA2
-biplot(p, colby = "definition", lab = NULL, legendPosition = 'right')
-
-
-```
-
-
-In order to identify samples that show unexpected coordinates on the PCA plot, a  plot with sample label can be helpful.
-```{r chunk26 biplot matched tumor-normal with label, echo=FALSE,  out.width = "50%", fig.align = "center", include=FALSE}
-# biplot(p, colby = "definition", lab = substr(p$metadata$barcode,1,12), legendPosition = 'right')
-# knitr::include_graphics("C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/pca_with_labbel.png")
-```
-
-#### sample-to-sample distances 
-
-```{r chunk27 heat-map tumor-matched normal sample, echo = FALSE}
-normal_idx <- substr(colnames(assay(rld)),14,14) == "1"
-tumor_idx <- substr(colnames(assay(rld)),14,14) == "0"
-
-n_sample <- assay(rld)[, c(normal_idx) ]
-t_sample <- assay(rld)[, c(tumor_idx) ]
-
-colnames(n_sample) <- paste("NT_", substr(colnames(n_sample),1,12))
-colnames(t_sample) <- paste("TP_", substr(colnames(t_sample),1,12))
-
-message("sample-to-sample distances: normal tissue (NT)")
-# Dissimilarity matrix calculation for normal samples
-sampleDists <- dist(t(n_sample))
-sampleDistMatrix <- as.matrix(sampleDists)
-rownames(sampleDistMatrix) <- colnames(n_sample)
-colnames(sampleDistMatrix) <- NULL
-colors <- colorRampPalette( rev(brewer.pal(9, "Greens")) )(255)
-# heatmap visualization
-pheatmap(sampleDistMatrix,
-         clustering_distance_rows=sampleDists,
-         clustering_distance_cols=sampleDists,
-         col=colors)
-
-message("sample-to-sample distances: primary tumor tissue (TP)")
-# Dissimilarity matrix calculation for normal samples
-sampleDists <- dist(t(t_sample))
-sampleDistMatrix <- as.matrix(sampleDists)
-rownames(sampleDistMatrix) <- colnames(t_sample)
-colnames(sampleDistMatrix) <- NULL
-colors <- colorRampPalette( rev(brewer.pal(9, "Reds")) )(255)
-# heatmap visualization
-pheatmap(sampleDistMatrix,
-         clustering_distance_rows=sampleDists,
-         clustering_distance_cols=sampleDists,
-         col=colors)
-
-
-
-```
-
-
-So as we discovered by PCA and sample-to-sample distances, "TCGA-BL-A13J" should be removed from further analysis. 
-
-
-```{r chunk28 removing outlier tumor-normal matched, echo=FALSE, include= FALSE}
-# Making DESeqDataSet object which stores all experiment data
-
-rmCol_idx = c(grep("TCGA-BL-A13J", colnames(expDat)))
-
-rmRow_idx = c(grep("TCGA-BL-A13J", rownames(clin)))
-
-filtExpDat = expDat[, -rmCol_idx]
-filtClin = clin[-rmRow_idx,]
-
-# if not reorder them by:
-filtExpDat <- filtExpDat[, rownames(filtClin)]
-all(rownames(filtClin) == colnames(filtExpDat))
-
-dds <- DESeqDataSetFromMatrix(countData = round(filtExpDat),
-                              colData = filtClin,
-                              design = ~ definition)
-
-
-# prefilteration: it is not necessary but recommended to filter out low expressed genes
-
-keep <- rowSums(counts(dds)) >= 10
-dds <- dds[keep,]
-
-```
-#### DE result: Tumor vs. matched normal tissue
-```{r chunk29 DE on filtred matched tumor-normal sample, echo = FALSE, include=FALSE}
-dds <- DESeq(dds)
-res <- results(dds, alpha = 0.05) 
-resOrdered <- res[order(res$padj),]
-message("")
-message("Summary on tumor vs matched-normal sample DE analysis")
-summary(resOrdered)
-
-#message("Result table on tumor vs matched-normal sample DE analysis")
-#resOrdered
-
-resDf = data.frame(resOrdered)
-resDf = na.omit(resDf)
-resDf = resDf[resDf$padj < 0.001,]
-resDf = resDf[abs(resDf$log2FoldChange) >= 1.5,]
-resDf = resDf[order(abs(resDf$log2FoldChange), decreasing = TRUE),]
-
-# adding data on class and family
-sigrmsk = rmkSub[rmkSub$repName %in% rownames(resDf),]
-sigrmsk = sigrmsk[!duplicated(sigrmsk$repName),]
-sigrmsk = data.frame(sigrmsk[, c(3,4,5)])
-rownames(sigrmsk) <- sigrmsk$repName
-resDf = merge(sigrmsk, resDf, by = 0)
-resDf = resDf[,-1]
-
-
-message("")
-
-```
-```{r chunk29_2 DE on filtred matched tumor-normal sample, echo = FALSE}
-
-resDf %>%
-  kable(format = "html", col.names = colnames(resDf), caption = "Tumor vs matched-normal sample (adjusted-pvalue < 0.0001, abs(logFC) > 1.5") %>%
-  kable_styling() %>%
-  kable_classic(full_width = F, html_font = "Cambria")
-``` 
-  
-  
-The above table provides list of TE elements showed significant differences in their expression between tumor and matched normal tissues, considering strict criteria like adjusted pvalue < 0.0001 and absolute value of log2 fold-change > 1.5 (~ 3 times difference). The ratio in log2FC was calculated as Tumor/Normal.
-
-##### Volcano plot for dysregulated TEs
-```{r, fig.align = "center", out.width = "100%",echo=FALSE}
-# making dataset
-df = data.frame(res)
-df$repName = rownames(df)
-
-sigrmsk = rmkSub[rmkSub$repName %in% df$repName,]
-sigrmsk = sigrmsk[!duplicated(sigrmsk$repName),]
-sigrmsk = data.frame(sigrmsk[, c(3,4,5)])
-rownames(sigrmsk) <- sigrmsk$repName
-df = merge(sigrmsk, df, by = 0)
-df = df[,-1]
-df = df[, c(1,2,5,8,9)]
-df$log10AdjP = -log10(df$padj)
-# define columns for coloring 
-df$thresholdFC <- as.factor(abs(df$log2FoldChange) >= 0.58)
-df$class = ifelse(df$thresholdFC == "TRUE", df$repClass, "NS")
-
-
-
-# plotting
-col <- c("NS" = "black", "DNA" = "orange", "LINE" = "darkblue", "SINE" = "red2", "LTR" = "forestgreen", "Retroposon" = "aquamarine2")
-ggplot(data=df, aes(x= log2FoldChange, y = log10AdjP, color=class)) +
-  geom_point(alpha=.6, size=3) +
-  scale_colour_manual(values = col, breaks = c("DNA", "LINE", "SINE", "LTR", "Retroposon")) +
-  geom_vline(xintercept = 0.58, colour="#990000", linetype="dashed") +
-  geom_vline(xintercept = - 0.58, colour="#990000", linetype="dashed") +
-  geom_hline(yintercept = 1.30, colour="#990000", linetype="dashed") +
-  xlab("log2 Fold Change") +
-  ylab("-log10 Adj.p value") +
-  theme_bw()
-
-
-```
-##### DE genes expression heatmap:
-```{r chunk30 sig gene heatmap, echo=FALSE, fig.align = "center", out.width = "100%"}
-#https://davetang.org/muse/2018/05/15/making-a-heatmap-in-r-with-the-pheatmap-package/
-  
-#normalizing and scaling the ex mat
-# different methods of normalization:
-#vsd <- vst(dds, blind=FALSE)
-#rld <- rlog(dds, blind=FALSE)
-ntd <- normTransform(dds)
-
-# scaling: z-score
-cal_z_score <- function(x){
-  (x - mean(x)) / sd(x)
-}
- 
-#vsd_norm <- t(apply(assay(vsd), 1, cal_z_score))
-#rld_norm <- t(apply(assay(rld), 1, cal_z_score))
-ntd_norm <- t(apply(assay(ntd), 1, cal_z_score))
-
-#vsd_norm_sig = vsd_norm[rownames(vsd_norm) %in% rownames(resDf),]
-#rld_norm_sig = rld_norm[rownames(rld_norm) %in% rownames(resDf),]
-ntd_norm_sig = ntd_norm[rownames(ntd_norm) %in% resDf$repName,]
-
-# annotation df to show type of samples
-
-df = data.frame(filtClin$definition)
-rownames(df) = rownames(filtClin)
-df$r = rownames(df)
-colnames(df)[1] <- "type"
-df = df[order(df$type, decreasing = T),]
-
-ntd_norm_sig = ntd_norm_sig[, rownames(df)]
-
-r = df$r
-df=  data.frame(df[,-2])
-colnames(df)[1] <- "type"
-rownames(df) <- r
-# # clustering genes (row)
-# data_subset = assay(ntd)[rownames(ntd) %in% rownames(ntd_norm_sig),]
-# my_hclust_gene <- hclust(dist(data_subset), method = "complete")
-
-# visualization of dendrogram
-# as.dendrogram(my_hclust_gene) %>%
-#   plot(horiz = TRUE)
-
-# # cutting tree into two cluster of samples: usually under and over expression
-my_gene_col <- rmk[rmk$repName %in% rownames(ntd_norm_sig),]
-my_gene_col <- my_gene_col[!duplicated(my_gene_col$repName),]
-my_gene_col = data.frame(my_gene_col[, c(3:5)], check.names = F)
-rownames(my_gene_col) <- my_gene_col$repName
-my_gene_col = my_gene_col[,-1]
-my_gene_col = my_gene_col[rownames(my_gene_col),]
-my_gene_col = my_gene_col[,c(2,1)]
-# plotting: cutting rows into two
-pheatmap(ntd_norm_sig,
-          annotation_row = my_gene_col,
-          annotation_col = df,
-         cluster_cols = F,
-         show_colnames = F)
-
-#main command
-#  png(filename = "~/LINE1-BLCA/tumor-matchedNormalHeatMap.png", width = 9, height = 4, units = "in", res = 300)
-#  pheatmap(ntd_norm_sig,annotation_col = df, show_colnames = F, fontsize = 10)
-# dev.off()
-
-# knitr::include_graphics("C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/tumor-matchedNormalHeatMap.png")
-```
-
-```{r chunk33 DE preprocessing all tumor vs normals, echo=FALSE, include=FALSE}
-
-expDat = subTeExp
-clin = clinical
-
-# to see whether all rows of clinical are present in rna datset
-all(rownames(clin) %in% colnames(expDat))
-
-# whether they are in the same order:
-all(rownames(clin) == colnames(expDat))
-
-# if not reorder them by:
-expDat <- expDat[, rownames(clin)]
-all(rownames(clin) == colnames(expDat))
-
-```
-
-
-```{r chunk 34 DE 2 all genes/all tumor, echo=FALSE}
-# replace spaces with "_" in levels of definition column
-clin$definition <-  as.factor(gsub(" ", "_", clin$definition))
-# relevling factor to ensure tumors would be compared to normal tissue.
-#
-clin$definition <- relevel(clin$definition, ref = "Solid_Tissue_Normal")
-
-```
-
-#### Data quality assessment and quality control
-
-#### PCA
-```{r chunk35 DE 3 all genes/all tumor, echo=FALSE}
-# Making DESeqDataSet object which stores all experiment data
-dds <- DESeqDataSetFromMatrix(countData = round(expDat),
-                              colData = clin,
-                              design = ~ definition)
-
-# prefilteration: it is not necessary but recommended to filter out low expressed genes
-
-keep <- rowSums(counts(dds)) >= 10
-dds <- dds[keep,]
-
-# data tranfromation
-vsd <- varianceStabilizingTransformation(dds, blind = TRUE, fitType = "parametric")
-
-#rld <- rlog(dds, blind=FALSE)
-
-# making PC object
-p <- pca(assay(vsd), metadata = colData(vsd), removeVar = 0.1)
-
-# create PCA plot for PCA1 and PCA2
-biplot(p, colby = "definition", lab = NULL, legendPosition = 'right')
-
-
-```
-
-```{r chunk36 biplot  tumor normal with label, echo=FALSE,  out.width = "50%", fig.align = "center", include=FALSE}
-biplot(p, colby = "definition", lab = substr(p$metadata$barcode,1,12), legendPosition = 'right')
-#knitr::include_graphics("C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/pca_with_labbel.png")
-```
-
-#### sample-to-sample distances 
-
-```{r chunk37 heat-map tumor normal sample, echo = FALSE, }
+# # need to have a dataframe with time, status, and covariates
+# # covariates are log2CPM of surv TEs
+# # re-construct survdata for kaps
 # 
-tumor_idx <- substr(colnames(assay(vsd)),14,14) == "0"
-
-t_sample <- assay(vsd)[, c(tumor_idx) ]
-
-
-message("sample-to-sample distances: primary tumor tissue (TP)")
-# Dissimilarity matrix calculation for normal samples
-sampleDists <- dist(t(t_sample))
-sampleDistMatrix <- as.matrix(sampleDists)
-rownames(sampleDistMatrix) <- colnames(t_sample)
-colnames(sampleDistMatrix) <- NULL
-colors <- colorRampPalette( rev(brewer.pal(9, "Reds")) )(255)
-# heatmap visualization
-# png(filename = "~/LINE1-BLCA/tumorHeatMap.png", width = 19, height = 10, units = "in", res = 300)
-# pheatmap(sampleDistMatrix,
-#          clustering_distance_rows=sampleDists,
-#          labels_row = paste0(substr(rownames(sampleDistMatrix),6,7), 1:414),
-#          col=colors)
-# dev.off()
-
-knitr::include_graphics("C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/tumorHeatMap.png")
-
-```
-Based on the PC and heatmap we are going to remove all samples coming from "BL" center and also those we previously removed from the analysis.
-
-
-```{r chunk38 removing outlier tumor-normal , echo=FALSE, include= FALSE}
-# Making DESeqDataSet object which stores all experiment data
-
-rmCol_idx = c(grep("TCGA-GC-A6I3", colnames(expDat)), 
-              grep("TCGA-BL-A13J", colnames(expDat)),
-              grep("TCGA-BL-A13I-01", colnames(expDat)),
-              grep("TCGA-BL-A0C8-01", colnames(expDat)),
-              grep("TCGA-GD-A6C6-01", colnames(expDat)))
-
-rmRow_idx = c(grep("TCGA-GC-A6I3", rownames(clin)), 
-              grep("TCGA-BL-A13J", rownames(clin)),
-              grep("TCGA-BL-A13I-01", rownames(clin)),
-              grep("TCGA-BL-A0C8-01", rownames(clin)),
-              grep("TCGA-GD-A6C6-01", rownames(clin)))
-
-filtExpDat = expDat[, -rmCol_idx]
-filtClin = clin[-rmRow_idx,]
-
-# if not reorder them by:
-filtExpDat <- filtExpDat[, rownames(filtClin)]
-all(rownames(filtClin) == colnames(filtExpDat))
-
-```
-
-#### BLCA clustering based on the TE expression profile
-For clustering we employ a KNN graph based clustering followed by modularity optimization technique using Louvain algorithm. 
-
-```{r , echo = FALSE}
-# seurat package analysis
-
-rna = round(filtExpDat)
-tumor_index <- which(substr(colnames(rna),14,14) == '0')
-
-rna  = rna[, tumor_index]
-
-colData = filtClin
-colData = colData[colnames(rna),]
-r = rownames(rna)
-
-
-pbmc <- CreateSeuratObject(counts = rna,
-                           row.names = r,
-                           project = "TE_elements", 
-                           meta.data = colData[, c(77:239)],
-                           min.cells = 3, 
-                           min.features = 100)
-
-# normalization
-pbmc <- NormalizeData(pbmc, normalization.method = "LogNormalize", scale.factor = 10000)
-
-# Identification of highly variable features (feature selection)
-
-#vst method
-pbmc <- FindVariableFeatures(pbmc, selection.method = "vst", nfeatures = 200)
-# or z score
-#pbmc2 <- FindVariableFeatures(pbmc, selection.method = "mean.var.plot", nfeatures = 200)
-#
-#pbmc3 <- FindVariableFeatures(pbmc, selection.method = "dispersion", nfeatures = 200)
-
-
-# Identify the 10 most highly variable genes
-top10 <- head(VariableFeatures(pbmc), 10)
-
-
-# plot variable features with and without labels
-plot1 <- VariableFeaturePlot(pbmc)
-plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
-plot1 + plot2
-```
-```{r , echo = FALSE}
-# Perform linear dimensional reduction
-### scaling data for PCA
-all.genes <- rownames(pbmc)
-pbmc <- ScaleData(pbmc, features = all.genes)
-
-pbmc <- RunPCA(pbmc, features = VariableFeatures(object = pbmc))
-
-# Examine and visualize PCA results a few different ways
-print(pbmc[["pca"]], dims = 1:5, nfeatures = 5)
-# visualization
-VizDimLoadings(pbmc, dims = 1:2, reduction = "pca")
-```
-```{r , echo = FALSE}
-#
-DimPlot(pbmc, reduction = "pca")
-```
-
-```{r , echo = FALSE}
-# correlation
-DimHeatmap(pbmc, dims = 1, cells = 403, balanced = TRUE)
-#or
-DimHeatmap(pbmc, dims = 1:15, cells = 403, balanced = TRUE)
-```
-```{r, echo=FALSE}
-#
-# NOTE: This process can take a long time for big datasets, comment out for expediency. More
-# approximate techniques such as those implemented in ElbowPlot() can be used to reduce
-# computation time
-pbmc <- JackStraw(pbmc, num.replicate = 100)
-pbmc <- ScoreJackStraw(pbmc, dims = 1:20)
-
-JackStrawPlot(pbmc, dims = 1:15)
-
-# oe elbow plot
-ElbowPlot(pbmc)
-```
-```{r, echo=FALSE}
-
-# Cluster the cells
-
-pbmc <- FindNeighbors(pbmc, dims = 1:13)
-pbmc <- FindClusters(pbmc, resolution = 0.40)
-pbmc <- FindClusters(pbmc, resolution = 0.60)
-pbmc <- FindClusters(pbmc, resolution = 0.80)
-pbmc <- FindClusters(pbmc, resolution = 1.0)
-pbmc <- FindClusters(pbmc, resolution = 1.2)
-pbmc <- FindClusters(pbmc, resolution = 0.20)
-
-
-
-#
-# Look at cluster IDs of the first 5 cells
-head(Idents(pbmc), 5)
-
-#
-pbmc <- RunUMAP(pbmc, dims = 1:10)
-pbmc <- RunTSNE(pbmc, dims = 1:10)
-
-# note that you can set `label = TRUE` or use the LabelClusters function to help label
-# individual clusters
-DimPlot(pbmc, reduction = "umap")
-```
-```{r, echo=FALSE}
-
-#Finding differentially expressed features (cluster biomarkers)
-
-# find all markers of cluster 0
-cluster1.markers <- FindMarkers(pbmc, ident.1 = 1, min.pct = 0)
-head(cluster1.markers, n = 5)
-
-# find all markers distinguishing cluster 0 from clusters others
-cluster0.markers <- FindMarkers(pbmc, ident.1 = 0, ident.2 = c(1), min.pct = 0)
-head(cluster0.markers, n = 5)
-
-
-# find markers for every cluster compared to all remaining cells, 
-pbmc.markers <- FindAllMarkers(pbmc, only.pos = F, min.pct = 0, logfc.threshold = 0)
-pbmc.markers %>%
-  group_by(cluster) %>%
-  slice_max(n = 2, order_by = avg_log2FC)
-
-
-cluster0.markers <- FindMarkers(pbmc, ident.1 = 0, logfc.threshold = 0.25, test.use = "roc", only.pos = FALSE)
-
-# visualization
-VlnPlot(pbmc, features = rownames(cluster0.markers)[1:10])
-RidgePlot(object = pbmc, features = c('PC_1', 'PC_2'))
-DotPlot(object = pbmc, features = rownames(cluster0.markers)[1:10])
-
-
-FeaturePlot(pbmc, features = pbmc.markers$gene[1:10])
-```
-```{r, echo=FALSE}
-# heatmap
-pbmc.markers %>%
-  group_by(cluster) %>%
-  top_n(n = 10, wt = avg_log2FC) -> top10
-DoHeatmap(pbmc, features = top10$gene) + NoLegend()
-
-```
-```{r, feature eng for heatmap, echo=FALSE}
-# add data to the meta-data object
-dt <- pbmc@meta.data
-strictOrder = rownames(dt)
-
-# removing paper_ from column names
-names(dt)[4:166] <- substr(names(dt)[4:166],7,length(names(dt)[4:166]))
-
-
-# ADDING data
-# adding old cluster
-df = read.csv("~/LINE1-BLCA/TE_clust.csv")
-rownames(df) <- df$barcode
-df = df[rownames(dt),]
-all(rownames(df) == rownames(dt))
-dt$old_cluster = df$TE_cluster
-
-
-
-# adding more data to meta_data 
-### working with data from : https://www.frontiersin.org/articles/10.3389/fimmu.2021.672158/full
-
-estDat = read.csv("~/LINE1-BLCA/estimateScoreTCGA.csv")
-tmeDat = read.csv("~/LINE1-BLCA/tmeScoreTCGA.csv")
-uDat = left_join(estDat, tmeDat, by = "ID")
-
-#making tmp dataframe for joining
-tmp = dt[1:3]
-tmp$ID = substr(rownames(tmp),1,15)
-tmp$barcode = rownames(tmp)
-
-uDat = left_join(tmp, uDat, by = "ID")
-rownames(uDat) <- uDat$barcode
-
-# removing unwanted column from uDat
-uDat = uDat[, c(6:ncol(uDat))]
-
-# making order of uDAt rownames as dt
-table(rownames(uDat) %in% rownames(dt))
-all(rownames(uDat) == rownames(dt))
-# adding to the main dataset
-dt = data.frame(cbind(dt, uDat))
-
-
-# Adding data from xcell
-xcell = data.frame(data.table::fread("~/LINE1-BLCA/xCell_TCGA_RSEM.txt"))
-
-# repair sample name in header
-colnames(xcell) = gsub('[.]', "-", colnames(xcell))
-cells = xcell$V1
-
-xcell = data.frame(t(xcell[, colnames(xcell) %in% substr(rownames(dt),1,15)]))
-colnames(xcell) = cells
-xcell$ID = rownames(xcell)
-
-#making tmp dataframe for joining
-tmp = dt[1:3]
-tmp$ID = substr(rownames(tmp),1,15)
-tmp$barcode = rownames(tmp)
-
-xcell = left_join(tmp, xcell, by = "ID")
-rownames(xcell) <- xcell$barcode
-
-# removing unwanted column from xcell
-xcell = xcell[, c(6:ncol(xcell))]
-
-# making order of xcell rownames as dt
-table(rownames(xcell) %in% rownames(dt))
-all(rownames(xcell) == rownames(dt))
-# adding to the main dataset
-dt = data.frame(cbind(dt, xcell))
-
-# adding cluster result to dt object
-# the following files coming from this script: clustering_MDA_DAmiRseq.R
-# added data for clustering by concensus non-negative factorization clustering 
-clusters = read.csv("~/LINE1-BLCA/clustersBYCancerSubtype.csv", row.names = 1)
-all(rownames(dt) == rownames(clusters))
-
-dt = do.call(cbind, list(dt,clusters))
-
-
-# working on variables
-# identify numeric variables
-numVar_idx = c(13,108:118,121,124,125,159,176:259)
-
-# categorical variables
-dim = as.numeric()
-varName = c()
-
-for(i in 1:ncol(dt)){
-  dim[i] = dim(table(dt[,i]))
-  varName[i] = colnames(dt)[i]
-}
-
-r = data.frame(varName = varName, dim = dim)
-# variables with more than 15 levels are numeric
-dt[dt == "ND"] <- NA
-dt[dt == "NA"] <- NA
-
-catVar_idx = as.numeric(rownames(r)[r$dim < 15])
-numVar_idx = as.numeric(rownames(r)[r$dim >15])
-
-#Tobacco.smoking.history
-dt$Tobacco.smoking.history[dt$Tobacco.smoking.history == "Current Reformed Smoker, Duration Not Specified"] <- NA
-dt$Tobacco.smoking.history[dt$Tobacco.smoking.history == "ND"] <- NA
-
-# AJCC.Tumor.category
-dt$AJCC.Tumor.category = ifelse(dt$AJCC.Tumor.category %in% c("T2", "T3", "T4"),dt$AJCC.Tumor.category, NA )
-
-# 
-dt$AJCC.metastasis.category[dt$AJCC.metastasis.category == "M1"] <- NA
-#Tumor.Status
-dt$Tumor.Status = ifelse(dt$Tumor.Status %in% c("TUMOR FREE", "WITH TUMOR"),dt$Tumor.Status, NA )
-
-#Inflammatory.Infiltrate.Response
-dt$Inflammatory.Infiltrate.Response = ifelse(dt$Inflammatory.Infiltrate.Response %in% c("Absent", "Absent(separateclustersofLymphocytes,notinfiltratingtumor)"),"Absent",
-                                             "Present")
-# combining mutations with deletions for CM genes
-# KDM6A, KMT2D, ARID1A, CREBBP, EP300, KMT2C, NCOR1, KMT2A
-
-# combined 
-dt$focal.deletion.in.KDM6A[dt$focal.deletion.in.KDM6A == "Del"] <- "Loss"
-dt$KDM6A = ifelse(dt$mutation.in.KDM6A == "yes" | 
-                    dt$focal.deletion.in.KDM6A == "Loss", "yes", "no")
-
-dt$focal.deletion.in.ARID1A[dt$focal.deletion.in.ARID1A == "Del"] <- "Loss"
-dt$ARID1A = ifelse(dt$mutation.in.ARID1A == "yes" |
-                    dt$focal.deletion.in.ARID1A == "Loss", "yes", "no")
-
-dt$focal.deletion.in.CREBBP[dt$focal.deletion.in.CREBBP == "Del"] <- "Loss"
-dt$CREBBP = ifelse(dt$mutation.in.CREBBP == "yes" | 
-                     dt$focal.deletion.in.CREBBP == "Loss", "yes", "no")
-
-dt$KMT2 = ifelse(dt$mutation.in.KMT2A == "yes" | 
-                   dt$mutation.in.KMT2C == "yes" |
-                   dt$mutation.in.KMT2D == "yes", "yes", "no")
-dt$KDM6AARID1A = ifelse(dt$KDM6A == "yes" | dt$ARID1A == "yes", "yes", "no")
-
-
-
-dt$CNMF2_cluster = as.factor(dt$CNMF2_cluster)
-# converting to numeric
-pbmc@meta.data = dt
-```
-```{r, echo=FALSE}
-# identifying samples with wrong label assignmnet based on Silhouette width
-tmp =pbmc@meta.data[, c(266:268)]
-summary(tmp$CNMF2_sil_width[tmp$CNMF2_cluster == 1])
-summary(tmp$CNMF2_sil_width[tmp$CNMF2_cluster == 2]) 
-table(tmp$CNMF2_sil_width[tmp$CNMF2_cluster == 1] < 0)
-
-# 7 cases found to be labeled wrongly by Silhoutte width, removing those sammples:
-# DE between groups with the COX FS dataset and then and redoing the Surat analysis. 
-
-toRemoveSamples = rownames(dt)[dt$CNMF2_sil_width < 0]
-```
-```{r DE between cNMF clusters, echo=FALSE}
-# DE between cNMF clusters:
-selectedTE4Clust <- readRDS("C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/selectedTE4Clust.rds")
-selectedTE4Clust = rownames(selectedTE4Clust)
-
-# subsetting expression matrix and clinical data
-rna = round(filtExpDat)
-tumor_index <- which(substr(colnames(rna),14,14) == '0')
-
-rna  = rna[, tumor_index]
-colData = dt
-
-rna = rna[selectedTE4Clust,]
-rna = rna[, -which(colnames(rna) %in% toRemoveSamples)]
-colData = colData[colnames(rna),]
-
-# DESeq object
-dds <- DESeqDataSetFromMatrix(countData = rna,
-                              colData = colData,
-                              design = ~ CNMF2_cluster)
-
-
-# prefilteration: it is not necessary but recommended to filter out low expressed genes
-
-keep <- rowSums(counts(dds)) >= 10
-dds <- dds[keep,]
-
-# normalized_count
-vsd <- assay(varianceStabilizingTransformation(dds,blind = TRUE, fitType = "parametric"))
-
-# DE
-dds <- DESeq(dds)
-
-res <- results(dds, alpha = 0.1, lfcThreshold=0.58) 
-resOrdered <- res[order(abs(res$log2FoldChange), decreasing = T),]
-summary(resOrdered)
-
-#message("Result table on tumor vs matched-normal sample DE analysis")
-#resOrdered
-
-resDf = data.frame(resOrdered)
-resDf = na.omit(resDf)
-resDf = resDf[resDf$padj < 0.1,]
-resDf = resDf[abs(resDf$log2FoldChange) >= 0.58,]
-resDf = resDf[order(abs(resDf$log2FoldChange), decreasing = TRUE),]
-
-# adding data on class and family
-sigrmsk = rmkSub[rmkSub$repName %in% rownames(resDf),]
-sigrmsk = sigrmsk[!duplicated(sigrmsk$repName),]
-sigrmsk = data.frame(sigrmsk[, c(3,4,5)])
-rownames(sigrmsk) <- sigrmsk$repName
-resDf = merge(sigrmsk, resDf, by = 0)
-resDf = resDf[,-1]
-
-
-```
-```{r , echo = FALSE}
-
-resDf %>%
-  kable(format = "html", col.names = colnames(resDf), caption = "TE_Cluster2 vs Te_Cluster1 (FDR = 0.1, logFC > 0.58") %>%
-  kable_styling() %>%
-  kable_classic(full_width = F, html_font = "Cambria")
-``` 
-  
-
-##### Volcano plot for DE genes between clusters
-```{r, fig.align = "center", out.width = "100%",echo=FALSE}
-# making dataset
-df = data.frame(res)
-df$repName = rownames(df)
-
-sigrmsk = rmkSub[rmkSub$repName %in% df$repName,]
-sigrmsk = sigrmsk[!duplicated(sigrmsk$repName),]
-sigrmsk = data.frame(sigrmsk[, c(3,4,5)])
-rownames(sigrmsk) <- sigrmsk$repName
-df = merge(sigrmsk, df, by = 0)
-df = df[,-1]
-df = df[, c(1,2,5,8,9)]
-df$log10AdjP = -log10(df$padj)
-# define columns for coloring 
-df$thresholdFC <- as.factor(abs(df$log2FoldChange) >= 0.58)
-df$class = ifelse(df$thresholdFC == "TRUE", df$repClass, "NS")
-
-
-
-# plotting
-col <- c("NS" = "white", "DNA" = "orange", "LINE" = "darkblue", "SINE" = "red2", "LTR" = "forestgreen", "Retroposon" = "aquamarine2")
-ggplot(data=df, aes(x= log2FoldChange, y = log10AdjP, color=class)) +
-  geom_point(alpha=.6, size=3) +
-  scale_colour_manual(values = col, breaks = c("DNA", "LINE", "SINE", "LTR", "Retroposon")) +
-  geom_vline(xintercept = 0.58, colour="#990000", linetype="dashed") +
-  geom_vline(xintercept = - 0.58, colour="#990000", linetype="dashed") +
-  geom_hline(yintercept = 1, colour="#990000", linetype="dashed") +
-  xlab("log2 Fold Change") +
-  ylab("-log10 Adj.p value") +
-  theme_bw()
-
-
-
-```
-```{r, echo=FALSE}
-# doing a heatmap
-
-
-te <- CreateSeuratObject(counts = rna,
-                           row.names = rownames(rna),
-                           project = "TE_elements", 
-                           meta.data = colData[, -c(1:3, 167:174)],
-                           min.cells = 3, 
-                           min.features = 100)
-
-# normalization
-te <- NormalizeData(te, normalization.method = "LogNormalize", scale.factor = 10000)
-
-# Identification of highly variable features (feature selection)
-
-#vst method
-te <- FindVariableFeatures(te, selection.method = "vst", nfeatures = 25)
-# or z score
-#te2 <- FindVariableFeatures(te, selection.method = "mean.var.plot", nfeatures = 200)
-#
-#te3 <- FindVariableFeatures(te, selection.method = "dispersion", nfeatures = 200)
-
-
-# Identify the 10 most highly variable genes
-top10 <- head(VariableFeatures(te), 10)
-
-
-# plot variable features with and without labels
-plot1 <- VariableFeaturePlot(te)
-plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
-plot1 + plot2
-```
-```{r , echo = FALSE}
-# Perform linear dimensional reduction
-### scaling data for PCA
-all.genes <- rownames(te)
-te <- ScaleData(te, features = all.genes)
-
-te <- RunPCA(te, features = VariableFeatures(object = te))
-
-# Examine and visualize PCA results a few different ways
-print(te[["pca"]], dims = 1:5, nfeatures = 5)
-# visualization
-VizDimLoadings(te, dims = 1:2, reduction = "pca")
-```
-```{r , echo = FALSE}
-#
-DimPlot(te, reduction = "pca")
-```
-
-```{r , echo = FALSE}
-# correlation
-DimHeatmap(te, dims = 1, cells = 396, balanced = TRUE)
-#or
-DimHeatmap(te, dims = 1:10, cells = 396, balanced = TRUE)
-```
-```{r, echo=FALSE}
-#
-# NOTE: This process can take a long time for big datasets, comment out for expediency. More
-# approximate techniques such as those implemented in ElbowPlot() can be used to reduce
-# computation time
-te <- JackStraw(te, num.replicate = 100)
-te <- ScoreJackStraw(te, dims = 1:20)
-
-JackStrawPlot(te, dims = 1:15)
-
-# oe elbow plot
-ElbowPlot(te)
-```
-```{r, echo=FALSE}
-
-# Cluster the cells
-
-te <- FindNeighbors(te, dims = 1:20)
-te <- FindClusters(te, resolution = 0.40)
-# te <- FindClusters(te, resolution = 0.60)
-# te <- FindClusters(te, resolution = 0.80)
-# te <- FindClusters(te, resolution = 1.0)
-# te <- FindClusters(te, resolution = 1.2)
-te <- FindClusters(te, resolution = 0.20)
-
-
-
-#
-# Look at cluster IDs of the first 5 cells
-head(Idents(te), 5)
-
-#
-te <- RunUMAP(te, dims = 1:20)
-te <- RunTSNE(te, dims = 1:20)
-
-# note that you can set `label = TRUE` or use the LabelClusters function to help label
-# individual clusters
-DimPlot(te, reduction = "umap")
-```
-```{r, echo=FALSE}
-
-#Finding differentially expressed features (cluster biomarkers)
-
-# find all markers of cluster 0
-cluster1.markers <- FindMarkers(te, ident.1 = 1, min.pct = 0)
-head(cluster1.markers, n = 5)
-
-# find all markers distinguishing cluster 0 from clusters others
-cluster0.markers <- FindMarkers(te, ident.1 = 0, ident.2 = c(1), min.pct = 0)
-head(cluster0.markers, n = 5)
-
-
-# find markers for every cluster compared to all remaining cells, 
-te.markers <- FindAllMarkers(te, only.pos = F, min.pct = 0, logfc.threshold = 0)
-te.markers %>%
-  group_by(cluster) %>%
-  slice_max(n = 20, order_by = avg_log2FC)
-
-
-cluster0.markers <- FindMarkers(te, ident.1 = 0, logfc.threshold = 0.25, test.use = "roc", only.pos = FALSE)
-
-# visualization
-VlnPlot(te, features = rownames(cluster0.markers)[1:10])
-RidgePlot(object = te, features = c('PC_1', 'PC_2'))
-DotPlot(object = te, features = rownames(cluster0.markers)[1:10])
-
-
-FeaturePlot(te, features = te.markers$gene[1:10])
-```
-```{r, echo=FALSE}
-# heatmap
-te.markers %>%
-  group_by(cluster) %>%
-  top_n(n = 10, wt = avg_log2FC) -> top10
-DoHeatmap(te, features = top10$gene) + NoLegend()
-
-```
-
-```{r, echo = FALSE}
-dittoHeatmap(te, 
-             genes = top10$gene,
-             annot.by = c("seurat_clusters", "CNMF2_cluster","ImmuneScore",
-                          "Inflammatory.Infiltrate.Response", "KDM6A" ),
-             heatmap.colors = colorRampPalette(c("blue", "white", "red"))(100))
-```
-```{r, setting order for columns in heatmap}
-s = read.csv("~/LINE1-BLCA/consensusClusterinNMIBC.csv")
-r1 = rownames(te@meta.data)
-te@meta.data$barcode = rownames(te@meta.data)
-te@meta.data = left_join(te@meta.data, s, by = "barcode")
-rownames(te@meta.data) <- r1
-```
-```{r, echo = FALSE}
-# finding significant association with clusters
-intCatVar = c(c("gender", "Tobacco.smoking.history", "AJCC.Tumor.category", "Lymphovascular.invasion",
-  "AJCC.LN.category", "AJCC.metastasis.category", "AJCC.pathologic.tumor.stage",
-  "Histologic.grade", "Tumor.category.12.vs..34", "LN.negative.vs..positive", 
-  "Combined.T.and.LN.category", "Extracapsular.extension", "Tumor.Status",
-  "Inflammatory.Infiltrate.Response","mRNA.cluster","Hypermethylation.cluster",
-  "Hypomethylation.cluster", "microRNA.cluster", "lncRNA.cluster", "RPPA.cluster",
-  "Mutation.process.cluster","SMG.SCNA.cluster", "consensusClass"), names(te@meta.data)[c(49:107, 126:158, 161:167,273:277)])
-
-
-varName = c()
-pValue = as.numeric()
-
-for(i in 1:length(intCatVar)){
-  varName[i] = intCatVar[i]
-  c = chisq.test(te@meta.data$CNMF2_cluster, te@meta.data[, intCatVar[i]])
-  pValue[i] = c$p.value
-}
-
-catRes = data.frame(varName = varName,
-                    pValue = pValue)
-catRes$adjP =  p.adjust(catRes$pValue, method = "bonferroni")
-
-sigCat = catRes$varName[catRes$adjP < 0.05]
-
-# for numeric values
-# Statistical significance
-
-numVar = names(te@meta.data)[-which(names(te@meta.data) %in% intCatVar)]
-numVar = numVar[c(9,11,12,27,28:37, 40:45,47:130)]
-  
-varName  = c()
-pValue_t = as.numeric()
-pValue_w = as.numeric()
-
-
-for(i in 1:length(numVar)){
-  res.t.test <- t.test(as.numeric(te@meta.data[, numVar[i]]) ~ te@meta.data$CNMF2_cluster, data = data.frame(te@meta.data), var.equal = TRUE)
-res.wilcox <- wilcox.test(as.numeric(te@meta.data[, numVar[i]]) ~ te@meta.data$CNMF2_cluster, data = data.frame(te@meta.data), exact = FALSE)
-pValue_t[i] = res.t.test$p.value
-pValue_w[i] = res.wilcox$p.value
-varName[i] = numVar[i] 
-}
-
-numRes = data.frame(varName = varName,
-                    pValue_t = pValue_t,
-                    pValue_w = pValue_w)
-
-numRes$adjP.t =  p.adjust(numRes$pValue_t, method = "bonferroni")
-numRes$adjP.w =  p.adjust(numRes$pValue_w, method = "bonferroni")
-
-# table(numRes$adjP.t < 0.05)
-# 
-# FALSE  TRUE 
-#    72    32 
-# table(numRes$adjP.w < 0.05)
-# 
-# FALSE  TRUE 
-#    64    40 
-sigNum = numRes$varName[numRes$adjP.w < 0.05]
-sigNum =c("ESTIMATEScore", "ImmuneScore", "Cancer.DNA.fraction.from.ABSOLUTE", "Tumor.purity.from.ABSOLUTE") 
-
-sigVariables = c(sigCat, sigNum)
-
-# renaming variables
-te@meta.data$Hypermethylation.cluster = as.factor(te@meta.data$Hypermethylation.cluster)
-
-te@meta.data$Hypomethylation.cluster = as.factor(te@meta.data$Hypomethylation.cluster)
-te@meta.data$Cancer.DNA.fraction.from.ABSOLUTE = as.numeric(te@meta.data$Hypomethylation.cluster)
-te@meta.data$Tumor.purity.from.ABSOLUTE = as.numeric(te@meta.data$Tumor.purity.from.ABSOLUTE)
-
-names(te@meta.data)[258] <- "TEcluster"
-names(te@meta.data)[36] <- "Lymphocyte_Infiltration"
-names(te@meta.data)[167] <- "ImmuneSubtype"
-names(te@meta.data)[124] <- "Cancer_DNA_fraction"
-names(te@meta.data)[121] <- "Tumor_purity"
-names(te@meta.data)[19] <- "TumorStage"
-names(te@meta.data)[14] <- "TumorCategory"
-names(te@meta.data)[18] <- "MetastasisCategory"
-names(te@meta.data)[41] <- "mRNA_cluster"
-names(te@meta.data)[282] <- "consensusCluster"
-names(te@meta.data)[42] <- "Hypermethylation_cluster"
-names(te@meta.data)[43] <- "Hypomethylation_cluster"
-names(te@meta.data)[44] <- "microRNA_cluster"
-names(te@meta.data)[45] <- "lncRNA_cluster"
-names(te@meta.data)[46] <- "RPPA_cluster"
-names(te@meta.data)[50] <- "RB1_mutation"
-names(te@meta.data)[71] <- "FGFR3_mutation"
-```
-```{r, echo= FALSE}
-# plotting data with pheatmap
-dittoHeatmap(te, 
-             genes = top10$gene,
-             order.by = "TEcluster",
-             annot.by = c("TEcluster", "Lymphocyte_Infiltration", "ImmuneSubtype",
-                          "ImmuneScore", "StromalScore","Cancer_DNA_fraction",
-                          "Tumor_purity","TumorStage","TumorCategory", "MetastasisCategory", "mRNA_cluster","consensusCluster","RPPA_cluster", "lncRNA_cluster","microRNA_cluster","Hypermethylation_cluster","Hypomethylation_cluster", "RB1_mutation","FGFR3_mutation"),
-             heatmap.colors = colorRampPalette(c("dodgerblue", "black", "yellow"))(100))
-
-```
-```{r, echo= FALSE}
-# plotting data with pheatmap_ simple heatmap
-dittoHeatmap(te, 
-             genes = top10$gene,
-             order.by = "TEcluster",
-             annot.by = c("TEcluster"),
-             heatmap.colors = colorRampPalette(c("dodgerblue", "black", "yellow"))(100))
-
-```
-```{r, echo=FALSE}
-selTE = c("MER66A", "LTR47A", "Kanga1d", "HERV30-int", "LTR2C", "LTR10C", "LTR108d-Mam", "Harlequin-int", "HERVK11-int", "MER50-int", "MER57F", "MLT1E3-int", "LTR62", "AluYb8", "MER126", "L1MEg2", "LTR9C", "LTR10D", "LTR7Y", "HERV-Fc1-LTR2")
-
-# repClass = rmkSub[rmkSub$repName %in% selTE, ]
-# repClass = repClass[!duplicated(repClass$repName),]
-# repClass = data.frame(repClass[, c(3,4)], check.names = F)
-# rr= repClass$repName
-# repClass = data.frame(repClass[, -1])
-# rownames(repClass) = rr
-
-reptoAdd = c("LTR","LTR","DNA","LTR","LTR","LTR","LTR","LTR","LTR","LTR","LTR","LTR","LTR","SINE","DNA","LINE","LTR","LTR", "LTR","LTR")
-
-repClass = data.frame(TEclass = reptoAdd)
-rownames(repClass) = selTE
-
-dittoHeatmap(te, 
-             genes = top10$gene,
-             order.by = "TEcluster",
-             annot.by = c("TEcluster"),
-             annotation_row = repClass,
-             heatmap.colors = colorRampPalette(c("dodgerblue", "black", "yellow"))(100))
-
-```
-#### Survival analysis
-```{r , echo = FALSE}
-dat = te@meta.data
-names(dat)[30] <- "status"
-names(dat)[33] <- "time"
-
-dat$status = as.numeric(ifelse(dat$status == "Alive", 0,1))
-dat$time = as.numeric(dat$time)
-dat$time[dat$time <0] <- NA
-dat$time[dat$time >= 1826.25] <- 1826.25
-dat$status = ifelse(dat$time == 1826.25 & dat$status == 1, 0, dat$status)
-
-# univariate cox analysis
-
-# res.cox <- coxph(Surv(time, status) ~ TEcluster, data = dat)
-# res.cox
-# 
-# summary(res.cox)
-
-fit1 <- survfit(Surv(time, status) ~ consensusCluster, data = dat)
-fit2 <- survfit(Surv(time, status) ~ TEcluster, data = dat)
-
-
-survdiff(Surv(time, status) ~ consensusCluster, data = dat)
-#
-
-
-ggsurvplot(fit2,
-          data = dat,
-          pval = T, conf.int = T,
-          risk.table = TRUE, # Add risk table
-          risk.table.col = "strata", # Change risk table color by groups
-          linetype = "strata", # Change line type by groups
-          ggtheme = theme_bw(),
-          palette = c("#E7B800", "#2E9FDF"),
-          xlim = c(0, 1850))
-```
-```{r, echo = FALSE}
-dat$LumBas = ifelse(dat$consensusCluster %in% c("LumNS", "LumP", "LumU"), "Lum",
-                    ifelse(dat$consensusCluster == "Ba/Sq", "Ba/Sq", NA))
-
-dat$Lum = ifelse(dat$consensusCluster %in% c("LumP", "LumU"), dat$consensusCluster, NA)
-
-
-fit1 <- survfit(Surv(time, status) ~ LumBas + TEcluster , data = dat)
-fit2 <- survfit(Surv(time, status) ~ Lum + TEcluster, data = dat)
-
-ggsurvplot(fit1,
-          data = dat,
-          pval = T, conf.int = T,
-          risk.table = TRUE, # Add risk table
-          risk.table.col = "strata", # Change risk table color by groups
-          linetype = "strata", # Change line type by groups
-          ggtheme = theme_bw(),
-          xlim = c(0, 1850))
-```
-
-```{r, echo=FALSE}
-covariates = c("TEcluster","Lymphocyte_Infiltration", "ImmuneSubtype",
-                          "ImmuneScore", "StromalScore","Cancer_DNA_fraction",
-                          "Tumor_purity","TumorStage","TumorCategory", "MetastasisCategory", "mRNA_cluster","consensusCluster","RPPA_cluster", "lncRNA_cluster","microRNA_cluster","Hypermethylation_cluster","Hypomethylation_cluster", "RB1_mutation","FGFR3_mutation")
-
-univ_formulas <- sapply(covariates,
-                        function(x) as.formula(paste('Surv(time, status)~', x)))
-                        
-univ_models <- lapply( univ_formulas, function(x){coxph(x, data = dat)})
-# Extract data 
-univ_results <- lapply(univ_models,
-                       function(x){ 
-                          x <- summary(x)
-                          p.value<-signif(x$wald["pvalue"], digits=2)
-                          wald.test<-signif(x$wald["test"], digits=2)
-                          beta<-signif(x$coef[1], digits=2);#coeficient beta
-                          HR <-signif(x$coef[2], digits=2);#exp(beta)
-                          HR.confint.lower <- signif(x$conf.int[,"lower .95"], 2)
-                          HR.confint.upper <- signif(x$conf.int[,"upper .95"],2)
-                          HR <- paste0(HR, " (", 
-                                       HR.confint.lower, "-", HR.confint.upper, ")")
-                          res<-c(beta, HR, wald.test, p.value)
-                          names(res)<-c("beta", "HR (95% CI for HR)", "wald.test", 
-                                        "p.value")
-                          return(res)
-                          #return(exp(cbind(coef(x),confint(x))))
-                         })
-varName = c()
-pValue = c()
-
-for(i in 1:length(univ_results)){
-  varName[i] = names(univ_results)[i]
-  l = length(univ_results[[i]])
-  pValue[i] = univ_results[[i]][l]
-}
-res = data.frame(varName = varName,
-                 pValue = as.numeric(pValue))
-res$FDR = p.adjust(res$pValue)
-
-```
-```{r, echo=FALSE}
-res$varName[res$pValue < 0.05]
-res.cox <- coxph(Surv(time, status) ~ TEcluster + ImmuneSubtype + Tumor_purity + TumorStage + TumorCategory + MetastasisCategory + consensusCluster + RPPA_cluster + lncRNA_cluster + microRNA_cluster + Hypomethylation_cluster , data =  dat)
-summary(res.cox)
-```
-
-```{r, echo=FALSE}
-# adding onco-exaptation data
-
-data1 = read.csv("TABLE R2- All TE-derived Alternative Isoforms with Sample Labels.csv", row.names = 1, check.names = F)
-data2 = readxl::read_excel("TABLE R1- All TE-derived Alternative Isoforms with TranscriptID.xlsx", sheet = 1)
-blcaMetadat <- readRDS("C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/blcaMetadat.RDS")
-
-
-highConfChim = read.csv("high_confidence_chimeric.csv", check.names = F)
-highConfChim = highConfChim[highConfChim$BLCA > 0,]
-# keeping only BLCA
-chimBLCA = data1[data1$`TCGA Cancer` =="BLCA",]
-a = length(unique(chimBLCA$`Transcript ID`))
-sprintf("Number of unique chimeric TE-gene transcripts: %i", a)
-
-# top chimeric in BLCA samples
-a = unclass(table(chimBLCA$`Transcript ID`))
-a = data.frame(TranscriptID = names(a), TransCount = a, percent = a/414)
-a  =a[order(a$TransCount, decreasing = T),]
-topChimChar = a$TranscriptID[1:10]
-topChim = data2[data2$`Transcript ID` %in% topChimChar,]
-
-
-
-a = unclass(table(chimBLCA$`TCGA Sample ID`))
-hist(a, main = "TE chimeric transcript count in TCGA-BLCA samples", xlab = "")
-
-hist(log2(chimBLCA$`Candidate Expression (FPKM)`), main = " chimeric transcripts expression (log2FPKM) TCGA-BLCA", xlab = "")
-
-a = data.frame(col1 = names(a), chimCount = a)
-d = merge(blcaMetadat, a, by = 0)
-
-# merging datasets
-dim(chimBLCA)
-dim(data2)
-
-data2 = data2[data2$BLCA_tumor != 0,]
-
-chim = dplyr::left_join(chimBLCA, data2, by = "Transcript ID")
-
-#
-
-
-# testing for numbers
-t.test(chimCount ~ TEcluster, data = d, var.equal = TRUE)
-
-group_by(d, TEcluster) %>%
-  summarise(
-    count = n(),
-    mean = round(mean(chimCount, na.rm = TRUE),2),
-    sd = round(sd(chimCount, na.rm = TRUE),2)) %>% 
-  kable(format = "html", col.names = c("TEcluster", "ClusterSampleCount", "Avg. chimeric Transcript", "SD"), caption = "Number of expressed chimeric transcript in each TE cluster (p-value = 1.976e-10)") %>%
-  kable_styling() %>%
-  kable_classic(full_width = F, html_font = "Cambria")
-
-```
-```{r, echo =FALSE}
-t.test(chimCount ~ TEcluster, data = d, var.equal = TRUE)
-
-res.aov <- aov(chimCount ~ consensusCluster, data = d[!is.na(d$consensusCluster),])
-# Summary of the analysis
-summary(res.aov)
-
-# Tuky
-TukeyHSD(res.aov)
-
-
-
-group_by(d[!is.na(d$consensusCluster),], consensusCluster) %>%
-  summarise(
-    count = n(),
-    mean = round(mean(chimCount, na.rm = TRUE),2),
-    sd = round(sd(chimCount, na.rm = TRUE),2)) %>% 
-  kable(format = "html", col.names = c("MIBC consensus subtypes", "SubtypeSampleCount", "Avg. chimeric Transcript", "SD"), caption = "Number of expressed chimeric transcript in MIBC consenses subtypes (ANOVA p = 1.8e-07") %>%
-  kable_styling() %>%
-  kable_classic(full_width = F, html_font = "Cambria")
-```
-```{r, echo=FALSE}
-#top chimeric transcript in BLCA
-topChim = data1[data1$`TCGA Cancer` == "BLCA",]
-
-topChimChar = unclass(table(topChim$`Transcript ID`))
-topChimChar = data.frame(TranscriptID = names(topChimChar), count = topChimChar)
-topChimChar = topChimChar[order(topChimChar$count, decreasing = T),]
-names(topChimChar)[1] = names(topChim)[1]
-
-topChimFinal = left_join(topChimChar, data2, by = "Transcript ID")
-topChimFinalFiltred = na.omit(topChimFinal)
-
-topChimFinalFiltredSubset = topChimFinalFiltred[,c(1,3,4,5,10,14,15,44,45,47)]
-topChimFinalFiltredSubset = topChimFinalFiltredSubset[order(topChimFinalFiltredSubset$`FANTOM5 Peak`, decreasing = T),]
-
-rownames(topChimFinalFiltredSubset) <- NULL
-
-topChimFinalFiltredSubset[c(1:10),] %>%
-  kable(format = "html", caption = "Top TE-oncogen chimeric transcript in BLCA") %>%
-  kable_styling() %>%
-  kable_classic(full_width = F, html_font = "Cambria")
-```
-
-```{r, echo=FALSE}
-# test for differences between Te cluster for L1PA2-SYT1
-
-topChimFinalFiltredSubset$`Transcript ID`[1]
-
-L1PA2_SYT1 = data1[data1$`Transcript ID` == topChimFinalFiltredSubset$`Transcript ID`[1],]
-
-L1PA2_SYT1 = L1PA2_SYT1[L1PA2_SYT1$`TCGA Cancer` == "BLCA",]
-L1PA2_SYT1 = L1PA2_SYT1[, c(1:2)]
-names(L1PA2_SYT1)[2] = names(d)[1]
-
-d = dplyr::left_join(d, L1PA2_SYT1, by = "Row.names")
-names(d)[294] = "L1PA2_SYT1"
-d$L1PA2_SYT1 =  ifelse(is.na(d$L1PA2_SYT1), "no", "yes")
-
-chisq.test(table(d$TEcluster, d$L1PA2_SYT1))
-chisq.posthoc.test::chisq.posthoc.test(table(d$consensusCluster, d$L1PA2_SYT1))
-
-
-# L1M1_E2f5
-topChimFinalFiltredSubset$`Transcript ID`[2]
-
-L1M1_E2f5 = data1[data1$`Transcript ID` == topChimFinalFiltredSubset$`Transcript ID`[2],]
-
-L1M1_E2f5 = L1M1_E2f5[L1M1_E2f5$`TCGA Cancer` == "BLCA",]
-L1M1_E2f5 = L1M1_E2f5[, c(1:2)]
-names(L1M1_E2f5)[2] = names(d)[1]
-
-d = dplyr::left_join(d, L1M1_E2f5, by = "Row.names")
-names(d)[295] = "L1M1_E2f5"
-d$L1M1_E2f5 =  ifelse(is.na(d$L1M1_E2f5), "no", "yes")
-
-chisq.test(d$TEcluster, d$L1M1_E2f5)
-chisq.posthoc.test::chisq.posthoc.test(table(d$consensusCluster, d$L1M1_E2f5))
-
-```
-
-## Immuneprofile
-```{r, echo=FALSE}
-# celltypes:
-Epithelial = c("Epithelial cells", "Keratinocytes", "Melanocytes", "Astrocytes", "Neurons", "Hepatocytes", "Sebocytes")
-HSC = c("Erythrocytes", "MPP", "CMP", "GMP", "MEP", "HSC", "Megakaryocytes", "CLP", "Platelets")
-Lymphoid = c("CD8+ T-cells", "NK cells", "CD4+ naive T-cells", "B-cells", "CD4+ T-cells", "CD8+ Tem", "Tregs", "Plasma cells", "CD4+ Tcm", "CD4+ Tem", "Memory B-cells", "CD8+ Tcm", "naive B-cells", "CD4+ memory T-cells", "pro B-cells", "Class-switched memory B-cells", "Th2 cells", "Th1 cells", "CD8+ naive T-cells", "NKT", "Tgd cells")
-Myeloid = c("Monocytes", "Macrophages", "DC", "Neutrophils", "Eosinophils", "Macrophages M1", "Macrophages M2", "aDC", "Basophils", "cDC", "pDC", "iDC", "Mast cells")
-Stroma = c("Endothelial cells", "Smooth muscle cells", "Fibroblasts", "Chondrocytes", "Adipocytes", "mv Endothelial cells", "Myocytes", "ly Endothelial cells", "MSC", "Osteoblast", "Preadipocytes", "Skeletal muscle cells", "Pericytes", "Mesangial cells")
-
-xcellSub = te@meta.data[, c(258, 188:251)]
-names(xcellSub)[2:65] <- names(xcell)
-``` 
-```{r, echo=FALSE}
-numVar = names(xcellSub)[2:65]
-varName  = c()
-pValue_t = as.numeric()
-
-
-
-for(i in 1:length(numVar)){
-  res.t.test <- t.test(as.numeric(xcellSub[, numVar[i]]) ~ xcellSub$TEcluster, data = xcellSub, var.equal = TRUE)
-
-pValue_t[i] = res.t.test$p.value
-
-varName[i] = numVar[i] 
-}
-
-XcellnumRes = data.frame(varName = varName,
-                    pValue_t = pValue_t)
-
-XcellnumRes$adjP.t =  p.adjust(XcellnumRes$pValue_t, method = "fdr")
-
-xcellSig = XcellnumRes$varName[XcellnumRes$adjP.t < 0.05]
-xcellSig = na.omit(xcellSig)
-```
-```{r, echo=FALSE}
-# Lymphoid
-plotDF = xcellSub[, c("TEcluster", intersect(xcellSig, Lymphoid))]
-plotDF = na.omit(plotDF)
-
-#scaling
-for(i in 2:ncol(plotDF)){
-  x = as.numeric(plotDF[,i])
-  minX = min(x)
-  maxX = max(x)
-  plotDF[,i] = (x-minX)/(maxX-minX)
-}
-
-plotDF = reshape2::melt(plotDF, id.var = "TEcluster")
-names(plotDF)[1] <- "TEcluster"
-positions = c("Th1 cells","Th2 cells", "CD4+ memory T-cells", "CD4+ Tcm","Tregs", "CD8+ naive T-cells", "CD8+ Tcm", "CD8+ Tem")
-
-ggplot(plotDF, aes(x = variable, y = value)) +
-  geom_boxplot(aes(fill = TEcluster), position = position_dodge(0.9), outlier.color = NA) +
-  xlab("Lymphoid") + 
-  scale_fill_manual(values = c("#999999", "#E69F00")) +
-  ylab("Scaled Enrichment score ") +
-  labs(caption = "Tcm:central memory T-cells , Tem:effector memory T-cells") + 
-  scale_x_discrete(limits = positions) +
-  theme_bw()
-
-```
-
-```{r, echo=FALSE}
-names(te@meta.data)[172:187]
-
-pathSel = te@meta.data[, c(258, 172:187)]
-# dropping the samples with NAs: TCGA-XF-AAN8-01A-11R-A42T-07
-pathSel = pathSel[- which(rownames(pathSel) == "TCGA-XF-AAN8-01A-11R-A42T-07"),]
-pathSel = pathSel[order(pathSel$TEcluster),]
-
-tmp =data.frame(t(pathSel[,-1]), check.names = F)
-
-
-
-cal_z_score <- function(x){
-  (x - mean(x)) / sd(x)
-}
- 
-data_subset_norm <- t(apply(tmp, 1, cal_z_score))
-pheatmap(data_subset_norm)
-
-my_hclust_gene <- hclust(dist(tmp), method = "complete")
-as.dendrogram(my_hclust_gene) %>%
-  plot(horiz = TRUE)
-
-my_gene_col <- data.frame(cutree(tree = as.dendrogram(my_hclust_gene), k = 6))
-names(my_gene_col) = "pathwayClust"
-my_gene_col$pathwayClust = as.factor(my_gene_col$pathwayClust)
-
-#
-my_sample_col <- data.frame(TEcluster = pathSel$TEcluster)
-rownames(my_sample_col) = rownames(pathSel)
-
-pheatmap(data_subset_norm, annotation_col = my_sample_col,
-         cluster_cols = F,
-         cluster_rows = F, show_colnames = F)
-```
-```{r chunk41 consensus and orginal TCGA cluster assignmnet, echo=FALSE}
-
-library(consensusMIBC)
-data(tcgadat)
-
-# Single sample classification
-
-getConsensusClass(tcga.dat[, 1])
-
-#   consensusClass adjusted_pval separationLevel      LumP     LumNS      LumU Stroma-rich    Ba/Sq   NE-like
-#ss           LumP  1.698954e-90       0.6626931 0.6176298 0.5735781 0.5641684    0.589056 0.575446 0.1820276
-
-# Classification of a matrix of samples
-
-re <- getConsensusClass(tcga.dat)
-
-re[, c(1:3)] %>%
-  kable(format = "html", col.names = colnames(re)[1:3], caption = "TCGA-BLCA consensus clusters") %>%
-  kable_styling() %>%
-  kable_classic(full_width = F, html_font = "Cambria") %>%
-  kableExtra::scroll_box(width = "100%", height = "300px")
-``` 
-**separationLevel** gives a measure of how a sample is representative of its consensus class. It ranges from 0 to 1, with 0 meaning the sample is too close to other consensus classes to be confidently assigned one consensus class label, and 1 meaning the sample is highly representative of its consensus class and well separated from the other consensus classes. 
-
-A cross tabulation between TCGA cluster and consensus clusters:
-
-```{r chunk42 consensus subtpes in TCGA samples, echo=FALSE}
-
-tmp = clinical
-tmp = tmp[substr(rownames(tmp),1,16) %in% rownames(re),]
-tmp = tmp[!duplicated(substr(rownames(tmp),1,16)),]
-re$barcode = rownames(re)
-tmp$barcode  =substr(tmp$barcode,1,16)
-tmpJoin = dplyr::left_join(tmp, re, by = "barcode")
-
-cons_tcga = data.frame(unclass(table(tmpJoin$paper_mRNA.cluster, tmpJoin$consensusClass)))
-
-
-cons_tcga %>%
-  kable(format = "html", col.names = colnames(cons_tcga), caption = "Crosstabulation of TCGA clusters (rows) and consensus clusters (columns)") %>%
-  kable_styling() %>%
-  kable_classic(full_width = F, html_font = "Cambria") %>%
-  kableExtra::scroll_box(width = "100%", height = "300px")
-``` 
-
-
-```{r chunk43 sample selection based on DaMiRseq method, echo=FALSE, include=FALSE}
-
-library(DaMiRseq)
-
-# substetting expMat
-tumor_idx <- substr(colnames(filtExpDat),14,14) == "0"
-
-#
-subExpDat_damirseq = filtExpDat[, c(tumor_idx) ]
-
-#
-clin_damirseq = tmpJoin[, c(1,240)]
-colnames(clin_damirseq)[2] <- "class"
-
-rownames(clin_damirseq) = clin_damirseq$barcode
-#
-colnames(subExpDat_damirseq) <- substr(colnames(subExpDat_damirseq),1,16)
-
-#
-clin_damirseq = clin_damirseq[rownames(clin_damirseq) %in% colnames(subExpDat_damirseq),]
-subExpDat_damirseq = subExpDat_damirseq[, colnames(subExpDat_damirseq) %in% rownames(clin_damirseq)]
-
-#making columns and row to be in the same order
-clin_damirseq = clin_damirseq[colnames(subExpDat_damirseq), ]
-
-all(rownames(clin_damirseq) == colnames(subExpDat_damirseq))
-
-
-#
-subExpDat_damirseq = subExpDat_damirseq[, !duplicated(colnames(subExpDat_damirseq))]
-
-subExpDat_damirseq = subExpDat_damirseq[, rownames(clin_damirseq)]
-
-# if not reorder them by:
-subExpDat <- subExpDat[, rownames(subClin)]
-#all(rownames(subClin) == colnames(subExpDat))
-
-# creating the object
-SE = SummarizedExperiment(assays=round(subExpDat_damirseq),colData=clin_damirseq)
-
-# data filteration based on expression level:
-# genes with read counts greater than 10 (minCounts = 10) in at least
-# 70% of samples (fSample = 0.7)
-#  Coefficient of Variation (CV) : “hypervariants” those genes that present anomalous #read counts, by comparing to the mean value across the samples. We identify them by #calculating distinct CV on sample sets that belong to each ’class’.
-
-data_norm <- DaMiR.normalization(SE, minCounts=10, fSample=0.7,
-                                 hyper = "yes", th.cv = 3)
-# sample filtration: removing those samples that are not highly correlated among biological replicates;
-data_filt <- DaMiR.sampleFilt(data_norm, th.corr=0.90)
-
-dim(data_filt)
-
-table(colData(data_filt)[2])
-
-```
-
-
-```{r chunk 45 definig contrast for Consensus subtypes, echo=FALSE}
-# https://github.com/tavareshugo/tutorial_DESeq2_contrasts/blob/main/DESeq2_contrasts.m
-
-exdat = subExpDat[rownames(subExpDat) %in% rownames(assay(data_filt)), substr(colnames(subExpDat),1,16) %in% colnames(assay(data_filt))]
-
-
-dds <- DESeqDataSetFromMatrix(countData = round(exdat),
-                              colData = colData(data_filt),
-                              design = ~ class)
-dds <- DESeq(dds)
-
-#
-mod_mat = model.matrix(design(dds), colData(dds))
-
-# defining contrasts
-BaSq = colMeans(mod_mat[dds$class == "Ba/Sq", ])
-LumNS = colMeans(mod_mat[dds$class == "LumNS", ])
-LumP = colMeans(mod_mat[dds$class == "LumP", ])
-LumU = colMeans(mod_mat[dds$class == "LumU", ])
-Stroma_rich = colMeans(mod_mat[dds$class == "Stroma-rich", ])
-LumAll = colMeans(mod_mat[dds$class %in% c("LumNS",
-                                                "lumP",
-                                                "LumU" ),])
-
-# getting result for each contrast
-# BaSq
-res_BaSq_LumNS <- results(dds, contrast = BaSq - LumNS, alpha = 0.05)
-res_BaSq_LumP <- results(dds, contrast = BaSq - LumP, alpha = 0.05)
-res_BaSq_LumU <- results(dds, contrast = BaSq - LumU, alpha = 0.05)
-res_BaSq_Strom <- results(dds, contrast = BaSq - Stroma_rich, alpha = 0.05)
-res_BaSq_LumAll <- results(dds, contrast = BaSq - LumAll, alpha = 0.05)
-
-# LumNS
-res_LumNS_LumP <- results(dds, contrast = LumNS - LumP, alpha = 0.05)
-res_LumNS_LumU <- results(dds, contrast = LumNS - LumU, alpha = 0.05)
-res_LumNS_Stroma_rich <- results(dds, contrast = LumNS - Stroma_rich, alpha = 0.05)
-
-# LumP
-res_LumP_LumU <- results(dds, contrast = LumP - LumU, alpha = 0.05)
-res_LumP_Stroma_rich <- results(dds, contrast = LumU - Stroma_rich, alpha = 0.05)
-
-# LumAll
-res_Stroma_rich_LumAll <- results(dds, contrast = Stroma_rich - LumAll, alpha = 0.05)
-
-
-
-```
-```{r chunk 47 output table and repName and family name for subtype sepecific expression, echo = FALSE}
-#message("Result table on tumor vs matched-normal sample DE analysis")
-
-
-resResult = list(res_BaSq_LumNS, res_BaSq_LumP, res_BaSq_LumU,res_BaSq_Strom,res_BaSq_LumAll,res_LumNS_LumP, res_LumNS_LumU, res_LumNS_Stroma_rich, res_LumP_LumU, res_LumNS_Stroma_rich,res_LumP_LumU, res_LumP_Stroma_rich, res_Stroma_rich_LumAll )
-
-resResultNames = c("res_BaSq_LumNS", "res_BaSq_LumP", "res_BaSq_LumU","res_BaSq_Strom","res_BaSq_LumAll","res_LumNS_LumP", "res_LumNS_LumU", "res_LumNS_Stroma_rich", "res_LumP_LumU", "res_LumNS_Stroma_rich","res_LumP_LumU", "res_LumP_Stroma_rich", "res_Stroma_rich_LumAll" )
-
-names(resResult) = resResultNames
-
-finRes = list()
-
-for(i in 1:length(resResult)){
-  tmp = resResult[[i]]
-  tmp = tmp[order(tmp$padj),]
-  tmp = data.frame(tmp)
-  tmp = na.omit(tmp)
-  tmp = tmp[order(abs(tmp$log2FoldChange), decreasing = TRUE),]
-  tmp = tmp[,c(2,6)]
-  colnames(tmp) = c(paste0(substr(resResultNames[i],5,nchar(resResultNames[i])), "_LFC"), paste0(substr(resResultNames[i],5,nchar(resResultNames[i])), "_adjP"))
-  finRes[[i]] = tmp
-}
-
-names(finRes) = resResultNames
-
-sigRes = data.frame(logFC = NA, adjPval = NA, TE = NA, comparision = NA)
-
-for(i in 1:length(finRes)){
-  print(names(finRes)[i])
-  print(dim(finRes[[i]][abs(finRes[[i]][,1]) >= 1.5 & finRes[[i]][,2] < 0.05,]))
-  tmp = finRes[[i]]
-  tmp = tmp[abs(tmp[,1]) >= 1.5 & tmp[,2] < 0.05,]
-  tmp$comparision = rep(names(finRes[i]), dim(tmp)[1])
-  tmp$TE = rownames(tmp)
-  rownames(tmp) = NULL
-  colnames(tmp)[1:2] <- c("logFC", "adjPval")
-  sigRes = rbind(sigRes, tmp)
-}
-sigRes = na.omit(sigRes)
-sigRes$comparision = substr(sigRes$comparision, 5, nchar(sigRes$comparision))
-
-
-
-# # adding data on class and family
-# sigrmsk = rmkSub[rmkSub$repName %in% rownames(resDf),]
-# sigrmsk = sigrmsk[!duplicated(sigrmsk$repName),]
-# sigrmsk = data.frame(sigrmsk[, c(3,4,5)])
-# rownames(sigrmsk) <- sigrmsk$repName
-# resDf = merge(sigrmsk, resDf, by = 0)
-# resDf = resDf[,-1]
-#
-#
-# message("")
-#
-# resDf %>%
-#   kable(format = "html", col.names = colnames(resDf), caption = "Tumor vs matched-normal sample (adjusted-pvalue < 0.0001, abs(logFC) > 1.5") %>%
-#   kable_styling() %>%
-#   kable_classic(full_width = F, html_font = "Cambria")
-
-```
-```{r chunk 46 sig gene heatmap, echo=FALSE, fig.align = "center", out.width = "100%"}
-#https://davetang.org/muse/2018/05/15/making-a-heatmap-in-r-with-the-pheatmap-package/
-
-#normalizing and scaling the ex mat
-# different methods of normalization:
-#vsd <- vst(dds, blind=FALSE)
-#rld <- rlog(dds, blind=FALSE)
-ntd <- normTransform(dds)
-
-# scaling: z-score
-cal_z_score <- function(x){
-  (x - mean(x)) / sd(x)
-}
-
-#vsd_norm <- t(apply(assay(vsd), 1, cal_z_score))
-#rld_norm <- t(apply(assay(rld), 1, cal_z_score))
-ntd_norm <- t(apply(assay(ntd), 1, cal_z_score))
-
-#vsd_norm_sig = vsd_norm[rownames(vsd_norm) %in% rownames(resDf),]
-#rld_norm_sig = rld_norm[rownames(rld_norm) %in% rownames(resDf),]
-ntd_norm_sig = ntd_norm[rownames(ntd_norm) %in% sigRes$TE,]
-
-# annotation df to show type of samples
-
-df = data.frame(colData(data_filt))
-
-# # clustering genes (row)
-# data_subset = assay(ntd)[rownames(ntd) %in% rownames(ntd_norm_sig),]
-# my_hclust_gene <- hclust(dist(data_subset), method = "complete")
-
-# visualization of dendrogram
-# as.dendrogram(my_hclust_gene) %>%
-#   plot(horiz = TRUE)
-
-# # cutting tree into two cluster of samples: usually under and over expression
-# my_gene_col <- cutree(tree = as.dendrogram(my_hclust_gene), k = 2)
-# my_gene_col <- data.frame(cluster = ifelse(test = my_gene_col == 1, yes = "cluster 1", no = "cluster 2"))
-
-
-# plotting: cutting rows into two
- # pheatmap(ntd_norm_sig,
- #          annotation_row = my_gene_col,
- #          annotation_col = df,
- #          cutree_rows = 2)
-
-# main command
-# png(filename = "~/LINE1-BLCA/tumor-matchedNormalHeatMap.png", width = 20, height = 13, units = "in", res = 300)
-pheatmap(ntd_norm_sig,annotation_col = df, show_colnames = F, fontsize = 10)
-# dev.off()
-
-knitr::include_graphics("C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/tumor-matchedNormalHeatMap.png")
-```
-```{r chunk 48 sig gene heatmap subtypes, echo=FALSE, fig.align = "center", out.width = "100%"}
-#https://davetang.org/muse/2018/05/15/making-a-heatmap-in-r-with-the-pheatmap-package/
-
-sigTE = sigRes$TE[sigRes$comparision == "BaSq_LumAll"]
-#normalizing and scaling the ex mat
-# different methods of normalization:
-vsd <- vst(dds, blind=FALSE)
-#rld <- rlog(dds, blind=FALSE)
-ntd <- normTransform(dds) # this object is from whole tumor samples,
-
-
-# scaling: z-score
-cal_z_score <- function(x){
-  (x - mean(x)) / sd(x)
-}
-
-vsd_norm <- t(apply(assay(vsd), 1, cal_z_score))
-#rld_norm <- t(apply(assay(rld), 1, cal_z_score))
-ntd_norm <- t(apply(assay(ntd), 1, cal_z_score))
-
-vsd_norm_sig = vsd_norm[rownames(vsd_norm) %in% sigTE,]
-#rld_norm_sig = rld_norm[rownames(rld_norm) %in% sigTE,]
-ntd_norm_sig = ntd_norm[rownames(ntd_norm) %in% sigTE,]
-
-
-# annotation df to show type of samples
-tmpClin = subClin[subClin$shortLetterCode == "TP",]
-tmpClin = tmpClin[tmpClin$cluster != "Neuronal", ]
-tmpClin = tmpClin[,c(1,114)]
-tmpClin$cluster = ifelse(tmpClin$cluster == "Basal_squamous", "BaSq", "Lum")
-ronm = rownames(tmpClin)
-tmpClin = data.frame(tmpClin[, -1])
-rownames(tmpClin) = ronm
-colnames(tmpClin) = "type"
-
-#
-vsd_norm_sig = vsd_norm_sig[, rownames(tmpClin)]
-ntd_norm_sig = ntd_norm_sig[, rownames(tmpClin)]
-
-# # clustering genes (row)
-# data_subset = assay(ntd)[rownames(ntd) %in% rownames(ntd_norm_sig),]
-# my_hclust_gene <- hclust(dist(data_subset), method = "complete")
-
-# visualization of dendrogram
-# as.dendrogram(my_hclust_gene) %>%
-#   plot(horiz = TRUE)
-
-# # cutting tree into two cluster of samples: usually under and over expression
-# my_gene_col <- cutree(tree = as.dendrogram(my_hclust_gene), k = 2)
-# my_gene_col <- data.frame(cluster = ifelse(test = my_gene_col == 1, yes = "cluster 1", no = "cluster 2"))
-
-
-# plotting: cutting rows into two
-# pheatmap(ntd_norm_sig,
-#          annotation_row = my_gene_col,
-#          annotation_col = df,
-#          cutree_rows = 2)
-
-# main command
-# png(filename = "~/LINE1-BLCA/tumor-matchedNormalHeatMap.png", width = 20, height = 13, units = "in", res = 300)
-pheatmap(ntd_norm_sig,annotation_col = tmpClin, show_colnames = F, fontsize = 10)
-# dev.off()
-
-# knitr::include_graphics("C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/tumor-matchedNormalHeatMap.png")
-```
-
-```{r survival analysis based on aggreagated family values, echo=FALSE}
-rna = round(filtExpDat)
-tumor_index <- which(substr(colnames(rna),14,14) == '0')
-
-rna  = rna[, tumor_index]
-
-colData = filtClin
-colData = colData[colnames(rna),]
-r = rownames(rna)
-
-# VST normalization
-dds <- DESeqDataSetFromMatrix(countData = rna,
-                              colData = colData,
-                              design = ~ 0)
-
-# prefilteration: it is not necessary but recommended to filter out low expressed genes
-
-keep <- rowSums(counts(dds)) >= 10
-dds <- dds[keep,]
-
-# data tranfromation
-vsd <- assay(varianceStabilizingTransformation(dds, blind = TRUE, fitType = "parametric"))
-
-# checking distribution
-CancerSubtypes::data.checkDistribution(vsd)
-# check expression measures
-hist(colSums(vsd))
-
-# add family data to the expression matrix
-sub = rmkSub[!duplicated(rmkSub$repName),]
-
-ltr = vsd[rownames(vsd) %in% sub$repName[sub$repClass == "LTR"],]
-dna = vsd[rownames(vsd) %in% sub$repName[sub$repClass == "DNA"],]
-sine = vsd[rownames(vsd) %in% sub$repName[sub$repClass == "SINE"],]
-line = vsd[rownames(vsd) %in% sub$repName[sub$repClass == "LINE"],]
-retroposon = vsd[rownames(vsd) %in% sub$repName[sub$repClass == "Retroposon"],]
-
-# categorizing expression values
-sample.name = colnames(rna)
-# ltr
-q.upper <- as.numeric(quantile(colMeans(ltr),0.66))
-q.lower <- as.numeric(quantile(colMeans(ltr),0.33))
-
-ltr.class.expression <- ifelse(colMeans(ltr) > q.upper,'High',
-                                 ifelse(colMeans(ltr) < q.lower,'Low',
-                                 "Medium"))
-#dna
-q.upper <- as.numeric(quantile(colMeans(dna),0.66))
-q.lower <- as.numeric(quantile(colMeans(dna),0.33))
-
-dna.class.expression <- ifelse(colMeans(dna) > q.upper,'High',
-                                 ifelse(colMeans(dna) < q.lower,'Low',
-                                 "Medium"))
-#sine
-q.upper <- as.numeric(quantile(colMeans(sine),0.66))
-q.lower <- as.numeric(quantile(colMeans(sine),0.33))
-
-sine.class.expression <- ifelse(colMeans(sine) > q.upper,'High',
-                                 ifelse(colMeans(sine) < q.lower,'Low',
-                                 "Medium"))
-#line
-q.upper <- as.numeric(quantile(colMeans(line),0.66))
-q.lower <- as.numeric(quantile(colMeans(line),0.33))
-
-line.class.expression <- ifelse(colMeans(line) > q.upper,'High',
-                                 ifelse(colMeans(line) < q.lower,'Low',
-                                 "Medium"))
-# retroposon
-q.upper <- as.numeric(quantile(colMeans(retroposon),0.66))
-q.lower <- as.numeric(quantile(colMeans(retroposon),0.33))
-
-retroposon.class.expression <- ifelse(colMeans(retroposon) > q.upper,'High',
-                                 ifelse(colMeans(retroposon) < q.lower,'Low',
-                                 "Medium"))
-surdf = data.frame(barcode = sample.name,
-                    ltr.class.expression = ltr.class.expression,
-                    dna.class.expression = dna.class.expression,
-                    sine.class.expression = sine.class.expression,
-                    line.class.expression = line.class.expression,
-                    retroposon.class.expression = retroposon.class.expression)
-
-
-surv.df.tmp = dat[rownames(dat) %in% rownames(surdf),]
-surdf = merge(surv.df.tmp, surdf, by.x = 0, by.y =0 , all.x = TRUE)
-
-
-# survival analysis
-
-fit1 <- survfit(Surv(time, status) ~ line.class.expression, data = surdf)
-fit2 <- survfit(Surv(time, status) ~ TEcluster, data = dat)
-
-
-survdiff(Surv(time, status) ~ retroposon.class.expression, data = surdf)
-#
-
-
-ggsurvplot(fit1,
-          data = surdf,
-          pval = T, conf.int = T,
-          risk.table = TRUE, # Add risk table
-          risk.table.col = "strata", # Change risk table color by groups
-          linetype = "strata", # Change line type by groups
-          ggtheme = theme_bw(),
-          #palette = c("#E7B800", "#2E9FDF"),
-          xlim = c(0, 1850))
-
-
-
-```
-
-```{r working on TPM files to obtains result similar to 10.1126sciadv.abc3020, echo = FALSE}
-
-tmp.all = readRDS("~/LINE1-BLCA/REdiscoverTE_results_tcga/RE_all_3_TPM.RDS")
-tmp.exon = readRDS("~/LINE1-BLCA/REdiscoverTE_results_tcga/RE_exon_3_TPM.RDS")
-
-# deduction of exons
-
-s1= tmp.all[-which(rownames(tmp.all) %in% rownames(tmp.exon)),]
-s2= tmp.all[which(rownames(tmp.all) %in% rownames(tmp.exon)),]
-s2 = s2 - tmp.exon
-
-# rejoing
-tmp.all = rbind(s1,s2)
-
-tmp.all = tmp.all[rownames(tmp.all) %in% intrestedElelements,]
-# log2 change
-log2TPM = log2(tmp.all + 1)
-
-# convertig colum name to TCGA barcode
-# 
-# order table based on the colname in gene expression,
-tableTPM <- table[colnames(log2TPM), ]
-# then save barcodes and assign them as colname for expression matrix
-colnames(log2TPM) = tableTPM$cases
-
-# 
-vsd = log2TPM[, colnames(log2TPM) %in% finalMetaData$barcode]
-
-
-# the rest is similar to the above code chunks
-
-# checking distribution
-CancerSubtypes::data.checkDistribution(vsd)
-# check expression measures
-hist(colSums(vsd))
-
-# add family data to the expression matrix
-sub = rmkSub[!duplicated(rmkSub$repName),]
-
-ltr = vsd[rownames(vsd) %in% sub$repName[sub$repClass == "LTR"],]
-dna = vsd[rownames(vsd) %in% sub$repName[sub$repClass == "DNA"],]
-sine = vsd[rownames(vsd) %in% sub$repName[sub$repClass == "SINE"],]
-line = vsd[rownames(vsd) %in% sub$repName[sub$repClass == "LINE"],]
-retroposon = vsd[rownames(vsd) %in% sub$repName[sub$repClass == "Retroposon"],]
-
-# categorizing expression values
-sample.name = colnames(vsd)
-# ltr
-q.upper <- as.numeric(quantile(colMeans(ltr),0.66))
-q.lower <- as.numeric(quantile(colMeans(ltr),0.33))
-
-ltr.class.expression <- ifelse(colMeans(ltr) > q.upper,'High',
-                                 ifelse(colMeans(ltr) < q.lower,'Low',
-                                 "Medium"))
-#dna
-q.upper <- as.numeric(quantile(colMeans(dna),0.66))
-q.lower <- as.numeric(quantile(colMeans(dna),0.33))
-
-dna.class.expression <- ifelse(colMeans(dna) > q.upper,'High',
-                                 ifelse(colMeans(dna) < q.lower,'Low',
-                                 "Medium"))
-#sine
-q.upper <- as.numeric(quantile(colMeans(sine),0.66))
-q.lower <- as.numeric(quantile(colMeans(sine),0.33))
-
-sine.class.expression <- ifelse(colMeans(sine) > q.upper,'High',
-                                 ifelse(colMeans(sine) < q.lower,'Low',
-                                 "Medium"))
-#line
-q.upper <- as.numeric(quantile(colMeans(line),0.66))
-q.lower <- as.numeric(quantile(colMeans(line),0.33))
-
-line.class.expression <- ifelse(colMeans(line) > q.upper,'High',
-                                 ifelse(colMeans(line) < q.lower,'Low',
-                                 "Medium"))
-# retroposon
-q.upper <- as.numeric(quantile(colMeans(retroposon),0.66))
-q.lower <- as.numeric(quantile(colMeans(retroposon),0.33))
-
-retroposon.class.expression <- ifelse(colMeans(retroposon) > q.upper,'High',
-                                 ifelse(colMeans(retroposon) < q.lower,'Low',
-                                 "Medium"))
-surdf = data.frame(barcode = sample.name,
-                    ltr.class.expression = ltr.class.expression,
-                    dna.class.expression = dna.class.expression,
-                    sine.class.expression = sine.class.expression,
-                    line.class.expression = line.class.expression,
-                    retroposon.class.expression = retroposon.class.expression)
-
-
-surv.df.tmp = dat[rownames(dat) %in% rownames(surdf),]
-surdf = merge(surv.df.tmp, surdf, by.x = 0, by.y =0 , all.x = TRUE)
-
-
-# survival analysis
-
-fit1 <- survfit(Surv(time, status) ~ dna.class.expression, data = surdf)
-fit2 <- survfit(Surv(time, status) ~ TEcluster, data = dat)
-
-
-survdiff(Surv(time, status) ~ retroposon.class.expression, data = surdf)
-#
-
-
-ggsurvplot(fit1,
-          data = surdf,
-          pval = T, conf.int = T,
-          risk.table = TRUE, # Add risk table
-          risk.table.col = "strata", # Change risk table color by groups
-          linetype = "strata", # Change line type by groups
-          ggtheme = theme_bw(),
-          #palette = c("#E7B800", "#2E9FDF"),
-          xlim = c(0, 1850))
-
-
-
-
-```
-
-```{r for cox analysis, echo=FALSE}
-ltr.num = colMeans(ltr)
-dna.num = colMeans(dna)
-sine.num = colMeans(sine)
-line.num = colMeans(line)
-retroposon.num = colMeans(retroposon)
-
-surdf = data.frame(barcode = sample.name,
-                    ltr.num = ltr.num,
-                    dna.num = dna.num,
-                    sine.num = sine.num,
-                    line.num = line.num,
-                    retroposon.num = retroposon.num)
-
-
-surv.df.tmp = dat[rownames(dat) %in% rownames(surdf),]
-surdf = merge(surv.df.tmp, surdf, by.x = 0, by.y =0 , all.x = TRUE)
-
-covariates <- c("ltr.num", "dna.num",  "sine.num", "line.num", "retroposon.num")
-
-# univariate cox
-univ_formulas <- sapply(covariates,
-                        function(x) as.formula(paste('Surv(time, status)~', x)))
-univ_models <- lapply( univ_formulas, function(x){coxph(x, data = surdf)})
-
-# Extract data 
-univ_results <- lapply(univ_models,
-                       function(x){ 
-                          x <- summary(x)
-                          p.value<-signif(x$wald["pvalue"], digits=2)
-                          wald.test<-signif(x$wald["test"], digits=2)
-                          beta<-signif(x$coef[1], digits=2);#coeficient beta
-                          HR <-signif(x$coef[2], digits=2);#exp(beta)
-                          HR.confint.lower <- signif(x$conf.int[,"lower .95"], 2)
-                          HR.confint.upper <- signif(x$conf.int[,"upper .95"],2)
-                          HR <- paste0(HR, " (", 
-                                       HR.confint.lower, "-", HR.confint.upper, ")")
-                          res<-c(beta, HR, wald.test, p.value)
-                          names(res)<-c("beta", "HR (95% CI for HR)", "wald.test", 
-                                        "p.value")
-                          return(res)
-                          #return(exp(cbind(coef(x),confint(x))))
-                         })
-res <- t(as.data.frame(univ_results, check.names = FALSE))
-as.data.frame(res)
-
-
-```
-
-```{r max stat , echo=FALSE}
-ltr = vsd[rownames(vsd) %in% sub$repName[sub$repClass == "LTR"],]
-dna = vsd[rownames(vsd) %in% sub$repName[sub$repClass == "DNA"],]
-sine = vsd[rownames(vsd) %in% sub$repName[sub$repClass == "SINE"],]
-line = vsd[rownames(vsd) %in% sub$repName[sub$repClass == "LINE"],]
-retroposon = vsd[rownames(vsd) %in% sub$repName[sub$repClass == "Retroposon"],]
-
-# categorizing expression values
-sample.name = colnames(vsd)
-
-#
-surdf = data.frame(barcode = sample.name,
-                    ltr = colMeans(ltr),
-                    dna = colMeans(dna),
-                    sine = colMeans(sine),
-                    line = colMeans(line),
-                    retroposon = colMeans(retroposon))
-
-
-surv.df.tmp = dat[rownames(dat) %in% rownames(surdf),]
-surdf = merge(surv.df.tmp, surdf, by.x = 0, by.y =0 , all.x = TRUE)
-
-# 
-surdf = surdf[, c(31,34,293:297)]
-
-surdf.cut = surv_cutpoint(
-   surdf,
-   time = "time",
-   event = "status",
-   variables = c("ltr", "dna", "sine", "line", "retroposon"))
-```
-
-```{r, echo=FALSE}
-# plot(surdf.cut, "ltr", palette = "npg")
-# plot(surdf.cut, "dna", palette = "npg")
-# plot(surdf.cut, "sine", palette = "npg")
-# plot(surdf.cut, "line", palette = "npg")
-# plot(surdf.cut, "retroposon", palette = "npg")
-
-surdf.cat <- surv_categorize(surdf.cut) 
-
-fit <- survfit(Surv(time, status) ~ retroposon ,
-               data = surdf.cat)
-
-ggsurvplot(
-   fit,                     # survfit object with calculated statistics.
-   risk.table = TRUE,       # show risk table.
-   pval = TRUE,             # show p-value of log-rank test.
-   conf.int = TRUE,         # show confidence intervals for 
-                            # point estimaes of survival curves.
-                            # survival estimates.
-   break.time.by = 1000,    # break X axis in time intervals by 500.
-   risk.table.y.text.col = T, # colour risk table text annotations.
-  risk.table.y.text = FALSE # show bars instead of names in text annotations
-                            # in legend of risk table
-)
-
-
-
-```
-
-```{r expression correlation, echo=FALSE}
-gene = readRDS("~/LINE1-BLCA/REdiscoverTE_results_tcga/GENE_3_TPM.RDS")
-
-# log2 change
-log2TPM = log2(gene + 1)
-
-# convertig colum name to TCGA barcode
-# 
-# order table based on the colname in gene expression,
-tableTPM <- table[colnames(log2TPM), ]
-# then save barcodes and assign them as colname for expression matrix
-colnames(log2TPM) = tableTPM$cases
-
-# 
-vsd = log2TPM[, colnames(log2TPM) %in% finalMetaData$barcode]
-vsd = t(vsd)
-
-
-obj = list(ltr = ltr, line = line, sine = sine, dna = dna, retroposon = retroposon)
-# empty vector
-resList = vector(mode = "list", length = 6)
-#
-for(i in 1:length(obj)){
-  vec = data.frame(colMeans(obj[[i]]))
-  data.corr <- cor(vec,vsd, method="spearman")
-  data.corr <- data.frame(t(data.corr))
-  colnames(data.corr)[1] <- names(obj)[i]
-  resList[[6]] <- rownames(data.corr)
-  resList[[i]] <- data.corr[,1]
-}
-
-corDataFrame = data.frame(gene = resList[[6]],
-                          LTR = resList[[1]],
-                          LINE = resList[[2]],
-                          SINE = resList[[3]],
-                          DNA = resList[[4]],
-                          Retroposon = resList[[5]])
-```
-
-```{r enrichment, echo=FALSE}
-
-###______________ in case need to work with gene symbols
-# library(org.Hs.eg.db)
-# ens2symbol <- AnnotationDbi::select(org.Hs.eg.db,
-#                                     key=corDataFrame$gene, 
-#                                     columns="SYMBOL",
-#                                     keytype="ENSEMBL")
-# names(ens2symbol)[1] <- "gene"
-# 
-# ens2symbol <- as_tibble(ens2symbol)
-# # joining
-# resLTR <- merge(corDataFrame[, c(1,2)], ens2symbol, by=c("gene"))
-# resLINE <- merge(corDataFrame[, c(1,3)], ens2symbol, by=c("gene"))
-# resSINE <- merge(corDataFrame[, c(1,4)], ens2symbol, by=c("gene"))
-# resDNA <- merge(corDataFrame[, c(1,5)], ens2symbol, by=c("gene"))
-# resRet <- merge(corDataFrame[, c(1,6)], ens2symbol, by=c("gene"))
-#_______________________________________________________________________
-
-#__ Subsetting bigger dataset per family:
-resLTR <- corDataFrame[, c(1,2)]
-resLINE <- corDataFrame[, c(1,3)]
-resSINE <- corDataFrame[, c(1,4)]
-resDNA <- corDataFrame[, c(1,5)]
-resRet <- corDataFrame[, c(1,6)]
-
-
-# loading new gene set
-library(fgsea)
-# gs = read.table("~/LINE1-BLCA/association_BP_CC_canPath_InterPro_HERVs_around_HERVs.txt", header = T)
-# 
-# gs.aggregated = aggregate(. ~ geneSetName, gs[, c(1,2)], FUN = function(x) 
-#   toString(x), na.action = NULL)
+# overlapTE_expMat <- t(log2CPM[rownames(log2CPM) %in% overlap_cor_sig_allTEs_surv_tes_fdr_0.05,])
+# # set orders
+# all(rownames(overlapTE_expMat) %in% rownames(survData))
+# #reorder
+# overlapTE_expMat <- overlapTE_expMat[rownames(survData),]
 # #
-# gs.aggregated$ens_Id = gsub(",", "", gs.aggregated$ens_Id)
-# gs.aggregated$ens_Id = strsplit(gs.aggregated$ens_Id[i],split=" ")
-
+# all(rownames(overlapTE_expMat) ==rownames(survData))
+# # TRUE
 # 
-pathways.hallmark <- fgsea::gmtPathways("~/mysigdb/testPathway.gmt")
-
-gsList = vector(mode =  "list", length = dim(gs.aggregated)[1])
-
-for(i in 1:length(pathways.hallmark)){
-  pathways.hallmark[[i]][pathways.hallmark[[i]] == ""] <- NA
-  pathways.hallmark[[i]] <- na.omit(pathways.hallmark[[i]])
-}
-
-# show few lines from the pathways file
-head(pathways.hallmark)
-
-##_____ ordering list LTR
-resLTR = resLTR[order(resLTR$LTR, decreasing = T),]
-
-ranks <- resLTR$LTR
-names(ranks) <- resLTR$gene
-
-#Running fgsea algorithm:
-fgseaResLTR <- fgseaMultilevel(pathways=pathways.hallmark, 
-                               stats=ranks,
-                               minSize = 10,
-                               maxSize = 1000,
-                               nPermSimple = 100000)
-
-# Tidy the results:
-fgseaResTidyLTR <- fgseaResLTR %>%
-  as_tibble() %>%
-  arrange(desc(NES)) # order by normalized enrichment score (NES)
-
-##______ ordering list LINE
-resLINE = resLINE[order(resLINE$LINE, decreasing = T),]
-ranks <- resLINE$LINE
-names(ranks) <- resLINE$gene
-#Running fgsea algorithm:
-fgseaResLINE <- fgseaMultilevel(pathways=pathways.hallmark, 
-                               stats=ranks,
-                               minSize = 10,
-                               maxSize = 1000,
-                               nPermSimple = 100000)
-# Tidy the results:
-fgseaResTidyLINE <- fgseaResLINE %>%
-  as_tibble() %>%
-  arrange(desc(NES)) # order by normalized enrichment score (NES)
-
-##____ ordering list SINE
-resSINE = resSINE[order(resSINE$SINE, decreasing = T),]
-ranks <- resSINE$SINE
-names(ranks) <- resSINE$gene
-#Running fgsea algorithm:
-fgseaResSINE <- fgseaMultilevel(pathways=pathways.hallmark, 
-                               stats=ranks,
-                               minSize = 10,
-                               maxSize = 1000,
-                               nPermSimple = 100000)
-# Tidy the results:
-fgseaResTidySINE <- fgseaResSINE %>%
-  as_tibble() %>%
-  arrange(desc(NES)) # order by normalized enrichment score (NES)
-
-##____ ordering list DNA
-resDNA = resDNA[order(resDNA$DNA, decreasing = T),]
-ranks <- resDNA$DNA
-names(ranks) <- resDNA$gene
-#Running fgsea algorithm:
-fgseaResDNA <- fgseaMultilevel(pathways=pathways.hallmark, 
-                               stats=ranks,
-                               minSize = 10,
-                               maxSize = 1000,
-                               nPermSimple = 100000)
-# Tidy the results:
-fgseaResTidyDNA <- fgseaResDNA %>%
-  as_tibble() %>%
-  arrange(desc(NES)) # order by normalized enrichment score (NES)
-
-##____ ordering list retroposon
-resRet = resRet[order(resRet$Retroposon, decreasing = T),]
-ranks <- resRet$Retroposon
-names(ranks) <- resRet$gene
-#Running fgsea algorithm:
-fgseaResRetroposon <- fgseaMultilevel(pathways=pathways.hallmark, 
-                               stats=ranks,
-                               minSize = 10,
-                               maxSize = 1000,
-                               nPermSimple = 100000)
-# Tidy the results:
-fgseaResTidyRetroposon <- fgseaResRetroposon %>%
-  as_tibble() %>%
-  arrange(desc(NES)) # order by normalized enrichment score (NES)
+# kasps_dat <- cbind(survData[, c(2:3)], overlapTE_expMat)
+# 
+# # Define the formula with all variables except time and status
+# f <- Surv(time, event) ~ . - time - event
+# 
+# # Apply kaps with K = 2:5
+# #fit2 <- kaps(f, data = kasps_dat, K = 2:5)
+# fit2 <- kaps(f, data = kasps_dat, K = 2)
+# saveRDS(fit2, "kapsK2.RDS")
+# fit3 <- kaps(f, data = kasps_dat, K = 3)
+# saveRDS(fit3, "kapsK3.RDS")
+# fit4 <- kaps(f, data = kasps_dat, K = 4)
+# saveRDS(fit4, "kapsK4.RDS")
+# fit5 <- kaps(f, data = kasps_dat, K = 5)
+# saveRDS(fit5, "kapsK5.RDS")
+#
 
 ```
-```{r visualization,echo=FALSE}
-
-names(fgseaResTidyLTR) = paste0("LTR_", names(fgseaResTidyLTR))
-names(fgseaResTidyLINE) = paste0("LINE_", names(fgseaResTidyLINE))
-names(fgseaResTidySINE) = paste0("SINE_", names(fgseaResTidySINE))
-names(fgseaResTidyDNA) = paste0("DNA_", names(fgseaResTidyDNA))
-names(fgseaResTidyRetroposon) = paste0("Retroposon_", names(fgseaResTidyRetroposon))
-
-names(fgseaResTidyLTR)[1] <- "pathway"
-names(fgseaResTidyLINE)[1] <- "pathway"
-names(fgseaResTidySINE)[1] <- "pathway"
-names(fgseaResTidyDNA)[1] <- "pathway"
-names(fgseaResTidyRetroposon)[1] <- "pathway"
-
-
-
-
-
-```
-
-```{r , echo=FALSE}
-# filtering based on the adjusted p value
-
-idx = ifelse(gseaDF$LTR_padj < 0.05, TRUE,
-             ifelse(gseaDF$DNA_padj < 0.05, TRUE,
-                    ifelse(gseaDF$LINE_padj < 0.05, TRUE,
-                           ifelse(gseaDF$SINE_padj < 0.05, TRUE,
-                                  ifelse(gseaDF$Retroposon_padj < 0.05, TRUE, FALSE)))))
-
-sigGSEA = gseaDF[idx,]
-
-sigGSEA = sigGSEA[!is.na(sigGSEA$pathway),]
-
-# filtering dataset based on the gene size > 10
-# sigGSEA = sigGSEA[sigGSEA$LTR_size >= 10,]
-# sigGSEA = sigGSEA[sigGSEA$LTR_size < 1000,]
-
-# subset based on the pathway gene name.
-# GO_BP
-GO_BP = sigGSEA[grep("GO_BP", sigGSEA$pathway),]
-# GO_CC
-# GO_MF
-# interPro
-# BIOCARTA
-# REACTOME
-# interPro
-# KEGG
-# msigdbCanonical_pathway
-
-
-
-# how many pathways are enriched for all categories
-gseaDF$inAll = ifelse(gseaDF$LTR_padj < 0.05 &
-                      gseaDF$LINE_padj < 0.05 &
-                      gseaDF$SINE_padj < 0.05 &
-                      gseaDF$DNA_padj < 0.05 &
-                      gseaDF$Retroposon_padj < 0.05, TRUE, FALSE)
-
-sigG = gseaDF[gseaDF$inAll == TRUE,]
-sigG = sigG[!is.na(sigG$pathway),]
-
-
-# make a subset
-subSig = sigG[, c(1,7,6,8,13,15,20,22,27,29,34,36)]
-
-for(i in 1:nrow(subSig)){
-  subSig$LTR_leadingEdge[i] = length(subSig$LTR_leadingEdge[[i]])
-  subSig$DNA_leadingEdge[i] = length(subSig$DNA_leadingEdge[[i]])
-  subSig$LINE_leadingEdge[i] = length(subSig$LINE_leadingEdge[[i]])
-  subSig$SINE_leadingEdge[i] = length(subSig$SINE_leadingEdge[[i]])
-  subSig$Retroposon_leadingEdge[i] = length(subSig$Retroposon_leadingEdge[[i]])
-
-}
-
-#
-# subset based on the pathway gene name.
-# GO_BP
-GO_BP = subSig[grep("GO_BP", subSig$pathway),]
-# GO_CC
-GO_CC = subSig[grep("GO_CC", subSig$pathway),]
-# GO_MF
-GO_MF = subSig[grep("GO_MF", subSig$pathway),]
-# interPro
-interPro = subSig[grep("interPro", subSig$pathway),]
-# BIOCARTA
-BIOCARTA = subSig[grep("BIOCARTA", subSig$pathway),]
-# REACTOME
-REACTOME = subSig[grep("REACTOME", subSig$pathway),]
-# KEGG
-KEGG = subSig[grep("KEGG", subSig$pathway),]
-# msigdbCanonical_pathway
-
-
-```
-
-```{r , echo = FALSE}
-#__________ converting GO term to GO ID_______________
-library(GO.db)
-GO <- as.list(GOTERM)
-
-goID = c()
-ont = c()
-defe = c()
-syn = c()
-term = c()
-
-
-for(i in 1:length(GO)){
-  print(i)
-  goID[i] = GO[[i]]@GOID
-  ont[i] = GO[[i]]@Ontology
-  defe[i] = GO[[i]]@Definition
-  term[i] = GO[[i]]@Term
-}
-GO_tab = data.frame(ID = goID,
-                    term = term,
-                    definition = defe)
-##_____________________________________________________
-
-bioProc = GO_BP[, c(1,3,5,7,9,11)]
-names(bioProc) = c("Pathway", "LTR", "LINE", "SINE", "DNA", "Retroposon")
-
-# remove parts of the GO
-bioProc$Pathway = substr(bioProc$Pathway, 1,12)
-bioProc$Pathway = gsub("_", "", bioProc$Pathway)
-bioProc$Pathway[1:5] = substr(bioProc$Pathway[1:5],2, nchar(bioProc$Pathway[1:5]))
-
-#
-tmpTab = GO_tab[GO_tab$ID %in% bioProc$Pathway,]
-rownames(tmpTab) = tmpTab$ID
-tmpTab = tmpTab[bioProc$Pathway,]
-# setting rowname to the enrichment result file
-rownames(bioProc) <- tmpTab$term
-#
-bioProc = bioProc[,-1]
-
-# semantic similarity between GO terms
-#http://dna.cs.miami.edu/GOGO/
-# preparing input:
-id = substr(GO_BP$pathway,1,11)
-id = gsub("_", "", id)
-col1 = c()
-col2= c()
-
-for(i in 1:57){
-  col1 = c(col1,rep(id[i],57))
-  col2= c(col2, rep(id, 57))
-}
-
-dF = data.frame(col1 = col1, col2 = col2)
-#
-# idx = c()
-# #
-# for(i in 1:nrow(dF)){
-# idx = c(idx,dF$col1[i] != dF$col2[i])
-# }
-
-#dF = dF[idx,]
-# data save
-write.table(dF, "~/GOSemio.txt", row.names = F, sep = "\t")
-
-# read table
-goSem = read.table("~/LINE1-BLCA/result_GOSemio.txt", sep = "\t")
-
-goSem = reshape2::dcast(goSem, V1 ~ V2)
-rownames(goSem) <- goSem$V1
-goSem = goSem[, -1]
-colnames(goSem) <- NULL
-#
-highlyCorrelated <- caret::findCorrelation(mat, cutoff=(0.7),verbose = TRUE)
-
-
-
-#
-idGO = rownames(goSem)
-GO_BP_tab = GO_tab[GO_tab$ID %in% idGO,]
-
-all(idGO == GO_BP_tab$ID)
-
-rownames(goSem) <- GO_BP_tab$term
-##______________________________________________
-
-# heatmap visualization to identify similar GOs for clustering
-hm = pheatmap(goSem)
-
-# exctracting row order from pheatmap object
-res <- goSem[c(hm$tree_row[["order"]]),hm$tree_col[["order"]]]
-
-geneAnnot = data.frame(go_term = rownames(res))
-geneAnnot$FunctionalClass <- NA
-
-geneAnnot$FunctionalClass[52:57] <- "Histone/Chromatin_Modification" 
-geneAnnot$FunctionalClass[46:51] <- "Protein biogenesis" 
-geneAnnot$FunctionalClass[44:45] <- "Immune Pathways" 
-geneAnnot$FunctionalClass[19:26] <- "Immune Pathways" 
-geneAnnot$FunctionalClass[14:18] <- "Transcription regulation" 
-geneAnnot$FunctionalClass[1:5] <- "DNA breakage repair"
-geneAnnot$FunctionalClass[6:13] <- "Transcription regulation"
-geneAnnot$FunctionalClass[10] <- "Protein biogenesis" 
-geneAnnot$FunctionalClass[c(46,27,28,31,40)] <- "Transcription regulation" 
-geneAnnot$FunctionalClass[is.na(geneAnnot$FunctionalClass)] <- "NS"
-
-# 
-geneAnnot = geneAnnot[c(1:9, 11:18, 27,28,31,40,46,19:26,44,45,29,30,32:39, 41:43, 50, 51, 10, 47:49, 52:57), ]
-
-geneAnnot = geneAnnot[c(52:57, 1:22, 35,44,46:51, 23:34, 36:43,45), ]
-
-
-
-#
-rn = geneAnnot$go_term
-geneAnnot = data.frame(geneAnnot[,-1])
-rownames(geneAnnot) = rn
-names(geneAnnot) <- "FunctionalClass"
-
-
-
-
-bioProc = bioProc[rownames(geneAnnot),]
-
-#
-library(pheatmap)
-png(filename = "~/LINE1-BLCA/GO_BP_enrichment.png", width = 11, height = 11, units = "in", res = 300)
-pheatmap(bioProc,
-         cellwidth = 10,
-         cellheight = 10,
-         cluster_rows = F,
-         annotation_row = geneAnnot,
-         gaps_row = c(6,11,28,30,36,46),
-         legend_labels = "NES",
-         main = "Biological Process GO Enrichment")
-dev.off()
-```
-```{r Between clusters GSEA analysis, echo = FALSE}
-# DE between cNMF clusters:
-selectedTE4Clust <- readRDS("C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/selectedTE4Clust.rds")
-selectedTE4Clust = rownames(selectedTE4Clust)
-
-# subsetting expression matrix and clinical data
-rna = round(filtExpDat)
-tumor_index <- which(substr(colnames(rna),14,14) == '0')
-
-rna  = rna[, tumor_index]
-colData = dt
-
-#rna = rna[selectedTE4Clust,]
-rna = rna[, -which(colnames(rna) %in% toRemoveSamples)]
-colData = finalMetaData[finalMetaData$barcode %in% colnames(rna),]
-
-# DESeq object
-dds <- DESeqDataSetFromMatrix(countData = rna,
-                              colData = colData,
-                              design = ~ TEcluster )
-
-
-# prefilteration: it is not necessary but recommended to filter out low expressed genes
-
-keep <- rowSums(counts(dds)) >= 10
-dds <- dds[keep,]
-
-# normalized_count
-vsd <- assay(varianceStabilizingTransformation(dds,blind = TRUE, fitType = "parametric"))
-
-# DE
-dds <- DESeq(dds)
-
-res <- results(dds, alpha = 0.1, lfcThreshold=0.58) 
-resOrdered <- res[order(abs(res$log2FoldChange), decreasing = T),]
-summary(resOrdered)
-
-#message("Result table on tumor vs matched-normal sample DE analysis")
-#resOrdered
-
-resDf = data.frame(resOrdered)
-resDf = na.omit(resDf)
-
-
-# adding data on class and family
-sigrmsk = rmkSub[rmkSub$repName %in% rownames(resDf),]
-sigrmsk = sigrmsk[!duplicated(sigrmsk$repName),]
-sigrmsk = data.frame(sigrmsk[, c(3,4,5)])
-rownames(sigrmsk) <- sigrmsk$repName
-resDf = merge(sigrmsk, resDf, by = 0)
-resDf = resDf[,-1]
-
-# combining the stat from resDF with the TE correlation with gene expression
-for(i in 1:length(obj)){
-  df = obj[[i]]
-  r = resDf[resDf$repName %in% rownames(df),]
-  r = r[match(rownames(df), r$repName),]
-  st = r$stat
-  df[rownames(df)[j],] = df[rownames(df)[j],] * resDf$stat[resDf$repName == rownames(df)[j]]
-  vec = data.frame(colMeans(df))
-  data.corr <- cor(vec,vsd, method="spearman")
-  data.corr <- data.frame(t(data.corr))
-  colnames(data.corr)[1] <- names(obj)[i]
-  resList2[[6]] <- rownames(data.corr)
-  resList2[[i]] <- data.corr[,1]
-}
-
-```
-
-```{r GSVA analysis, echo = FALSE}
-
-gene = readRDS("~/LINE1-BLCA/REdiscoverTE_results_tcga/GENE_1_raw_counts.RDS")
-#gene = readRDS("~/LINE1-BLCA/REdiscoverTE_results_tcga/GENE_2_counts_normalized.RDS")
-
-
-# convertig colum name to TCGA barcode
-# 
-# order table based on the colname in gene expression,
-tableGene <- table[colnames(gene), ]
-# then save barcodes and assign them as colname for expression matrix
-colnames(gene) = tableGene$cases
-
-#  creating expression set
-vsd = gene[, colnames(gene) %in% finalMetaData$barcode]
-rownames(finalMetaData) = finalMetaData$barcode
-
-es = ExpressionSet(assayData = vsd, 
-                   phenoData = AnnotatedDataFrame(finalMetaData))
-
-# preparing gene sets
-# GO_BP
-GO_BP = pathways.hallmark[grep("GO_BP", names(pathways.hallmark))]
-# GO_CC
-GO_CC = pathways.hallmark[grep("GO_CC", names(pathways.hallmark))]
-# GO_MF
-GO_MF = pathways.hallmark[grep("GO_MF", names(pathways.hallmark))]
-# interPro
-interPro = pathways.hallmark[grep("interPro", names(pathways.hallmark))]
-# BIOCARTA
-BIOCARTA = pathways.hallmark[grep("BIOCARTA", names(pathways.hallmark))]
-# REACTOME
-REACTOME = pathways.hallmark[grep("REACTOME", names(pathways.hallmark))]
-# KEGG
-KEGG = pathways.hallmark[grep("KEGG", names(pathways.hallmark))]
-
-
-# running GSVA
-library(GSVA)
-esrnaseq_normalized <- gsva(es,
-                            GO_BP,
-                            min.sz=10, 
-                            max.sz=500,
-                            method= "ssgsea",
-                            kcdf="Poisson")
-#saveRDS(esrnaseq, file = "~/LINE1-BLCA/gsva.GSVA.RDS")
-#readRDS("~/LINE1-BLCA/gsva.GSVA.RDS")
-
-library(limma)
-
-mod <- model.matrix(~ factor(esrnaseq_normalized$TEcluster))
-colnames(mod) <- c("ALL", "Cluster2")
-fit <- lmFit(esrnaseq_normalized, mod)
-fit <- eBayes(fit)
-res <- decideTests(fit, p.value=0.01)
-summary(res)
-
-tt <- topTable(fit, coef=2, n=Inf)
-
-```
-
-```{r GSVA by kong et al gene set, echo = FALSE}
-# Kong et al gene set
-kong <- fgsea::gmtPathways("~/mysigdb/Kong_et.al.gene.gmt")
-
-
-for(i in 1:length(kong)){
-  kong[[i]][kong[[i]] == ""] <- NA
-  kong[[i]] <- na.omit(kong[[i]])
-}
-
-# show few lines from the pathways file
-head(kong)
-
-# gene expression matrix 
-gene = readRDS("~/LINE1-BLCA/REdiscoverTE_results_tcga/GENE_1_raw_counts.RDS")
-
-# convertig colum name to TCGA barcode
-# order table based on the colname in gene expression,
-tableTPM <- table[colnames(gene), ]
-# then save barcodes and assign them as colname for expression matrix
-colnames(gene) = tableTPM$cases
-
-# 
-gene$row = rownames(gene)
-
-# Map Ensembl gene IDs to symbol. First create a mapping table.
-ens2symbol <- AnnotationDbi::select(org.Hs.eg.db,
-                                    key=rownames(gene), 
-                                    columns="SYMBOL",
-                                    keytype="ENSEMBL")
-
-names(ens2symbol)[1] <- "row"
-
-ens2symbol <- as_tibble(ens2symbol)
-
-# joining
-res <- merge(gene, ens2symbol, by="row", all.x = TRUE)
-
-# removing rows with NA in SYMBOL column from gene dataframe
-res = res[!is.na(res$SYMBOL), -1]
-# Collapsing cells with duplicated SYMBOL
-dupSymbols = unique(res$SYMBOL[duplicated(res$SYMBOL)])
-res2 = res[-which(res$SYMBOL %in% dupSymbols),]
-#define empty dataframe
-tdf =data.frame(matrix(ncol = 434, nrow = 0))
-colnames(tdf) = colnames(res)
-
-for(i in 1:length(dupSymbols)){
-  tmpdf = res[res$SYMBOL == dupSymbols[i],]
-  tmpdf = c(colMeans(tmpdf[, -434]), dupSymbols[i])
-  tdf = rbind(tdf, tmpdf)
-  colnames(tdf) = colnames(res)
-
-}
-# convert to numeric
-tdf[,-434] = data.frame(lapply(tdf[,-434], as.numeric))
-
-res = rbind(res2, tdf)
-# setting row names
-rownames(res) = res$SYMBOL
-res = res[, -434]
-# subsetting expression matrix to only include those selected beased on the previous analysis
-vsd = res[, colnames(res) %in% finalMetaData$barcode]
-rownames(finalMetaData) = finalMetaData$barcode
-
-all(rownames(finalMetaData) == colnames(vsd))
-
-es2 = ExpressionSet(assayData = as.matrix(vsd), 
-                   phenoData = AnnotatedDataFrame(finalMetaData))
-
-es2GSVA <- gsva(es2, kong, min.sz=1, 
-                            max.sz=500,
-                            method= "ssgsea",
-                            kcdf="Poisson")
-```
-```{r GSVA by kong et al gene set second approach, echo = FALSE}
-#
-kong = data.table::fread("~/mysigdb/Kong_et.al.gene.gmt")
-kong = reshape2::melt(kong, id.var = "V1")
-kong = kong[kong$value != "",]
-kong = kong[, c(1,3)]
-names(kong) = c("Pathway", "SYMBOL")
-# converting symbols to ENS ids
-sym2ens <- AnnotationDbi::select(org.Hs.eg.db,
-                                    key=kong$SYMBOL, 
-                                    columns="ENSEMBL",
-                                    keytype="SYMBOL")
-
-# filling NAs 
-sym2ens$ENSEMBL[sym2ens$SYMBOL == "APITD1"] = "ENSG00000175279"
-sym2ens$ENSEMBL[sym2ens$SYMBOL == "HIST1H2AG"] = "ENSG00000196787"
-sym2ens$ENSEMBL[sym2ens$SYMBOL == "HIST1H2AI"] = "ENSG00000196747"
-sym2ens$ENSEMBL[sym2ens$SYMBOL == "HIST1H2BL"] = "ENSG00000185130"
-sym2ens$ENSEMBL[sym2ens$SYMBOL == "MRE11A"] = "ENSG00000020922"
-sym2ens$ENSEMBL[sym2ens$SYMBOL == "HIST2H2BF"] = "ENSG00000203814"
-sym2ens$ENSEMBL[sym2ens$SYMBOL == "ADCK3"] = "ENSG00000163050"
-sym2ens$ENSEMBL[sym2ens$SYMBOL == "CTGF"] = "ENSG00000118523"
-sym2ens$ENSEMBL[sym2ens$SYMBOL == "C17orf70"] = "ENSG00000185504"
-sym2ens$ENSEMBL[sym2ens$SYMBOL == "C19orf40"] = "ENSG00000256004"
-sym2ens$ENSEMBL[sym2ens$SYMBOL == "FAM101B"] = "ENSG00000183688"
-sym2ens$ENSEMBL[sym2ens$SYMBOL == "SHFM1"] = "ENSG00000214857"
-sym2ens$ENSEMBL[sym2ens$SYMBOL == "STRA13"] = "ENSG00000134107"
-sym2ens$ENSEMBL[sym2ens$SYMBOL == "H2AFX"] = "ENSG00000188486"
-sym2ens$ENSEMBL[sym2ens$SYMBOL == "GNB2L1"] = "ENSG00000204628"
-sym2ens$ENSEMBL[sym2ens$SYMBOL == "H2AFJ"] = "ENSG00000246705"
-sym2ens$ENSEMBL[sym2ens$SYMBOL == "HIST1H1C"] = "ENSG00000187837"
-sym2ens$ENSEMBL[sym2ens$SYMBOL == "HIST3H2A"] = "ENSG00000181218"
-sym2ens$ENSEMBL[sym2ens$SYMBOL == "IKBKAP"] = "ENSG00000070061"
-sym2ens$ENSEMBL[sym2ens$SYMBOL == "LRMP"] = "ENSG00000118308"
-sym2ens$ENSEMBL[sym2ens$SYMBOL == "PIDD"] = "ENSG00000177595"
-sym2ens$ENSEMBL[sym2ens$SYMBOL == "ZNF36"] = "ENSG00000106261"
-
-# removing duplicates
-sym2ens = sym2ens[!duplicated(paste0(sym2ens$SYMBOL, sym2ens$ENSEMBL)),]
-
-kong2 = dplyr::left_join(kong, sym2ens)
-kong2 = kong2[, -2]
-# aggregating ids
-kong2 = aggregate(. ~ Pathway,kong2, FUN = function(x) 
-      toString(x), na.action = NULL)
-#write.csv(kong2, "~/mysigdb/konget.al.ENS.gmt")
-
-#_____________________________________________________________________#
-kong2 <- fgsea::gmtPathways("~/mysigdb/konget.al.ENS.gmt")
-
-
-for(i in 1:length(kong2)){
-  kong2[[i]][kong2[[i]] == ""] <- NA
-  kong2[[i]] = gsub(" ", "",kong2[[i]] )
-  kong2[[i]] <- na.omit(kong2[[i]])
-}
-
-# show few lines from the pathways file
-head(kong2)
-
-# gene expression matrix 
-gene = readRDS("~/LINE1-BLCA/REdiscoverTE_results_tcga/GENE_1_raw_counts.RDS")
-
-# convertig colum name to TCGA barcode
-# order table based on the colname in gene expression,
-tableTPM <- table[colnames(gene), ]
-# then save barcodes and assign them as colname for expression matrix
-colnames(gene) = tableTPM$cases
-
-#
-vsd = gene[, colnames(gene) %in% finalMetaData$barcode]
-rownames(finalMetaData) = finalMetaData$barcode
-
-all(rownames(finalMetaData) == colnames(vsd))
-
-es2 = ExpressionSet(assayData = as.matrix(vsd), 
-                   phenoData = AnnotatedDataFrame(finalMetaData))
-
-es2GSVA <- gsva(es2, kong2, min.sz=1, 
-                            max.sz=500,
-                            method= "ssgsea",
-                            kcdf="Poisson")
-# kong pathways scores
-ssgsea = es2GSVA@assayData[["exprs"]]
-
-```
-
-```{r DE GSVA analysis, echo = FALSE}
-library(limma)
-
-mod <- model.matrix(~ factor(esrnaseq_normalized$TEcluster))
-#colnames(mod) <- c("ALL", "Clust2vsALL")
-fit <- lmFit(esrnaseq_normalized, mod)
-fit <- eBayes(fit)
-res <- decideTests(fit, p.value=0.01, lfc = 0.58)
-summary(res)
-
-tt <- topTable(fit, coef=2, n=Inf)
-
-```
-
-```{r lasso regression, echo= FALSE}
-# predictors
-# 21 lymphoid cell scores
-rownames(finalMetaData) = finalMetaData$barcode
-
-totalLymphoid = c(199, 236, 194, 191, 195, 201, 251, 241, 196, 197, 225, 200, 233, 193, 244, 204, 250, 249, 198, 237, 248)
-#
-totalLymphoid = finalMetaData[, totalLymphoid]
-totalLymphoid = data.frame(lymphoid = rowSums(totalLymphoid))
-# the sum of 13 cell scores
-totalMyeloid = c(228, 219, 207, 235, 209, 220,221, 188, 192, 202, 239, 216, 222)
-totalMyeloid = finalMetaData[, totalMyeloid]
-totalMyeloid = data.frame(myeloid = rowSums(totalMyeloid))
-
-
-# tumor purity
-finalMetaData$TumorPurity[is.na(finalMetaData$TumorPurity)] <- mean(finalMetaData$TumorPurity, na.rm = T)
-
-tumorPurity = data.frame(tumorPurity = finalMetaData$TumorPurity)
-rownames(tumorPurity) = rownames(finalMetaData)
-tumorPurity = tumorPurity
-
-# merging data
-all(rownames(totalMyeloid) == rownames(tumorPurity))
-
-imm = cbind(tumorPurity, totalMyeloid, totalLymphoid)
-imm$myeloid[is.na(imm$myeloid)]  = mean(imm$myeloid, na.rm = T)
-imm$lymphoid[is.na(imm$lymphoid)]  = mean(imm$lymphoid, na.rm = T)
-
-# preparing TE expression data
-# rna = round(filtExpDat)
-# rna = rna[, colnames(rna) %in% finalMetaData$barcode]
-# 
-# # DESeq object
-# dds <- DESeqDataSetFromMatrix(countData = rna,
-#                               colData = finalMetaData,
-#                               design = ~ TEcluster)
-# # prefilteration: it is not necessary but recommended to filter out low expressed genes
-# 
-# keep <- rowSums(counts(dds)) >= 10
-# dds <- dds[keep,]
-# 
-# # normalized_count
-# vsd <- t(assay(varianceStabilizingTransformation(dds,blind = TRUE, fitType = "parametric")))
-
-# log2CPM
-log2CPM = edgeR::cpm(filtExpDat, log=TRUE)
-log2CPM = t(log2CPM[, colnames(log2CPM) %in% rownames(finalMetaData)])
-#____________________Spearman correlation: TEs and gene sig__________________#
-
-resSS = list()
-
-for(i in 1:ncol(log2CPM)){
-  resSS[[i]] <- cor(log2CPM[,i],t(ssgsea), method="spearman")
-  names(resSS)[i] = colnames(log2CPM)[i]
-}
-
-# correlation between gene sig and TEs
-genSigTE.corr = data.frame(do.call(rbind, resSS))
-rownames(genSigTE.corr) = names(resSS)
-
-
-
-#______________________________Lasso Regression________________________#
-library(glmnet)
-set.seed(20201215)
-
-# puting data togather
-d = cbind(log2CPM, imm)
-#Define predictor and response variables
-y <- t(ssgsea)[, 1]
-x <- as.matrix(d)
-#fit lasso regression model using k-fold cross-validation
-cv_model <- cv.glmnet(x, y, alpha = 1)
-best_lambda <- cv_model$lambda.min
-
-#display optimal lambda value
-best_lambda
-
-#view plot of test MSE's vs. lambda values
-plot(cv_model)
-
-#view coefficients of best model
-best_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
-coef(best_model)
-
-# store best variables
-c<-coef(best_model, s=best_lambda,exact=TRUE)
-inds<-which(c!=0)
-vars<-row.names(c)[inds]
-varsValue = c@x
-names(varsValue) = vars
-varsValue = varsValue[order(varsValue, decreasing = T)]
-#
-y_predicted <- predict(best_model, s = best_lambda, newx = x)
-
-#find SST and SSE
-sst <- sum((y - mean(y))^2)
-sse <- sum((y_predicted - y)^2)
-
-#find R-Squared
-rsq2 <- 1 - sse/sst
-rsq2
-
-#________________For loop for Lasso regression________________________#
-# empty list
-
-Pathway = c()
-lambda = c()
-R_Squared = c()
-feature = list()
-featureValue = list()
-
-dim = dim(t(ssgsea))[2]
-
-for( i in 1:dim){
-#Define predictor and response variables
-  y <- t(ssgsea)[, i]
-  x <- as.matrix(d)
-  Pathway[i] = colnames(t(ssgsea))[i]
-  #fit lasso regression model using k-fold cross-validation
-  cv_model <- cv.glmnet(x, y, alpha = 1)
-  best_lambda <- cv_model$lambda.min
-  lambda[i] = best_lambda
-  #view coefficients of best model
-  best_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
-  y_predicted <- predict(best_model, s = best_lambda, newx = x)
-  #find SST and SSE
-  sst <- sum((y - mean(y))^2)
-  sse <- sum((y_predicted - y)^2)
-  #find R-Squared
-  rsq <- 1 - sse/sst
-  R_Squared[i] = rsq
-  # variables
-  # store best variables
-  c = coef(best_model, s=best_lambda,exact=TRUE)
-  inds<-which(c!=0)
-  feature[[i]]<-row.names(c)[inds]
-  featureValue[[i]] = c@x
-}
-
-lassoResult = data.frame(Pathway = Pathway, lambda = lambda, R_Squared = R_Squared)
-
-# Adding feature and feature score
-lassoResult$feature <- NA
-lassoResult$featureScore <- NA
-
-for(i in 1:24){
-  lassoResult$feature[i] <- list(feature[[i]])
-  lassoResult$featureScore[i] <- list(featureValue[[i]])
-}
-
-
-```
-
-```{r Combes et al gene sig for LASSO regression}
-# 21 lymphoid cell scores
-rownames(finalMetaData) = finalMetaData$barcode
-
-totalLymphoid = c(199, 236, 194, 191, 195, 201, 251, 241, 196, 197, 225, 200, 233, 193, 244, 204, 250, 249, 198, 237, 248)
-#
-totalLymphoid = finalMetaData[, totalLymphoid]
-totalLymphoid = data.frame(lymphoid = rowSums(totalLymphoid))
-# the sum of 13 cell scores
-totalMyeloid = c(228, 219, 207, 235, 209, 220,221, 188, 192, 202, 239, 216, 222)
-totalMyeloid = finalMetaData[, totalMyeloid]
-totalMyeloid = data.frame(myeloid = rowSums(totalMyeloid))
-
-
-# tumor purity
-finalMetaData$TumorPurity[is.na(finalMetaData$TumorPurity)] <- mean(finalMetaData$TumorPurity, na.rm = T)
-
-tumorPurity = data.frame(tumorPurity = finalMetaData$TumorPurity)
-rownames(tumorPurity) = rownames(finalMetaData)
-tumorPurity = tumorPurity
-
-# merging data
-all(rownames(totalMyeloid) == rownames(tumorPurity))
-
-imm = cbind(tumorPurity, totalMyeloid, totalLymphoid)
-imm$myeloid[is.na(imm$myeloid)]  = mean(imm$myeloid, na.rm = T)
-imm$lymphoid[is.na(imm$lymphoid)]  = mean(imm$lymphoid, na.rm = T)
-
-# preparing TE expression data
-# rna = round(filtExpDat)
-# rna = rna[, colnames(rna) %in% finalMetaData$barcode]
-# 
-# # DESeq object
-# dds <- DESeqDataSetFromMatrix(countData = rna,
-#                               colData = finalMetaData,
-#                               design = ~ TEcluster)
-# # prefilteration: it is not necessary but recommended to filter out low expressed genes
-# 
-# keep <- rowSums(counts(dds)) >= 10
-# dds <- dds[keep,]
-# 
-# # normalized_count
-# vsd <- t(assay(varianceStabilizingTransformation(dds,blind = TRUE, fitType = "parametric")))
-
-# log2CPM
-log2CPM = edgeR::cpm(filtExpDat, log=TRUE)
-log2CPM = t(log2CPM[, colnames(log2CPM) %in% rownames(finalMetaData)])
-#____________________Spearman correlation: TEs and gene sig__________________#
-
-resSS = list()
-
-for(i in 1:ncol(log2CPM)){
-  resSS[[i]] <- cor(log2CPM[,i],t(ssgsea), method="spearman")
-  names(resSS)[i] = colnames(log2CPM)[i]
-}
-
-# correlation between gene sig and TEs
-genSigTE.corr = data.frame(do.call(rbind, resSS))
-rownames(genSigTE.corr) = names(resSS)
-
-
-
-#______________________________Lasso Regression________________________#
-library(glmnet)
-set.seed(20201215)
-
-# puting data togather
-d = cbind(log2CPM, imm)
-#Define predictor and response variables
-y <- t(ssgsea)[, 1]
-x <- as.matrix(d)
-#fit lasso regression model using k-fold cross-validation
-cv_model <- cv.glmnet(x, y, alpha = 1)
-best_lambda <- cv_model$lambda.min
-
-#display optimal lambda value
-best_lambda
-
-#view plot of test MSE's vs. lambda values
-plot(cv_model)
-
-#view coefficients of best model
-best_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
-coef(best_model)
-
-# store best variables
-c<-coef(best_model, s=best_lambda,exact=TRUE)
-inds<-which(c!=0)
-vars<-row.names(c)[inds]
-varsValue = c@x
-names(varsValue) = vars
-varsValue = varsValue[order(varsValue, decreasing = T)]
-#
-y_predicted <- predict(best_model, s = best_lambda, newx = x)
-
-#find SST and SSE
-sst <- sum((y - mean(y))^2)
-sse <- sum((y_predicted - y)^2)
-
-#find R-Squared
-rsq2 <- 1 - sse/sst
-rsq2
-
-#________________For loop for Lasso regression________________________#
-# empty list
-
-Pathway = c()
-lambda = c()
-R_Squared = c()
-feature = list()
-featureValue = list()
-
-dim = dim(t(ssgsea))[2]
-
-for( i in 1:dim){
-#Define predictor and response variables
-  y <- t(ssgsea)[, i]
-  x <- as.matrix(d)
-  Pathway[i] = colnames(t(ssgsea))[i]
-  #fit lasso regression model using k-fold cross-validation
-  cv_model <- cv.glmnet(x, y, alpha = 1)
-  best_lambda <- cv_model$lambda.min
-  lambda[i] = best_lambda
-  #view coefficients of best model
-  best_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
-  y_predicted <- predict(best_model, s = best_lambda, newx = x)
-  #find SST and SSE
-  sst <- sum((y - mean(y))^2)
-  sse <- sum((y_predicted - y)^2)
-  #find R-Squared
-  rsq <- 1 - sse/sst
-  R_Squared[i] = rsq
-  # variables
-  # store best variables
-  c = coef(best_model, s=best_lambda,exact=TRUE)
-  inds<-which(c!=0)
-  feature[[i]]<-row.names(c)[inds]
-  featureValue[[i]] = c@x
-}
-
-lassoResult = data.frame(Pathway = Pathway, lambda = lambda, R_Squared = R_Squared)
-
-# Adding feature and feature score
-lassoResult$feature <- NA
-lassoResult$featureScore <- NA
-
-for(i in 1:24){
-  lassoResult$feature[i] <- list(feature[[i]])
-  lassoResult$featureScore[i] <- list(featureValue[[i]])
-}
-
-```
-
-```{ r Combes et al GSVA, echo=FALSE}
-```
-
-```{r combes et al GSVA, echo = FALSE}
-
-combes <- fgsea::gmtPathways("~/mysigdb/Combes.et.al_gene_sig.ENS.gmt")
-
-
-for(i in 1:length(combes)){
-  combes[[i]][combes[[i]] == ""] <- NA
-  combes[[i]] = gsub(" ", "",combes[[i]] )
-  combes[[i]] <- na.omit(combes[[i]])
-}
-
-# show few lines from the pathways file
-head(combes)
-
-# gene expression matrix 
-gene = readRDS("~/LINE1-BLCA/REdiscoverTE_results_tcga/GENE_1_raw_counts.RDS")
-
-# convertig colum name to TCGA barcode
-# order table based on the colname in gene expression,
-tableTPM <- table[colnames(gene), ]
-# then save barcodes and assign them as colname for expression matrix
-colnames(gene) = tableTPM$cases
-
-#
-vsd = gene[, colnames(gene) %in% finalMetaData$barcode]
-rownames(finalMetaData) = finalMetaData$barcode
-
-all(rownames(finalMetaData) == colnames(vsd))
-
-es2 = ExpressionSet(assayData = as.matrix(vsd), 
-                   phenoData = AnnotatedDataFrame(finalMetaData))
-
-es2GSVA <- gsva(es2, combes, min.sz=1, 
-                            max.sz=500,
-                            method= "ssgsea",
-                            kcdf="Poisson")
-# kong pathways scores
-ssgsea = es2GSVA@assayData[["exprs"]]
-
-
-# 21 lymphoid cell scores
-rownames(finalMetaData) = finalMetaData$barcode
-
-totalLymphoid = c(199, 236, 194, 191, 195, 201, 251, 241, 196, 197, 225, 200, 233, 193, 244, 204, 250, 249, 198, 237, 248)
-#
-totalLymphoid = finalMetaData[, totalLymphoid]
-totalLymphoid = data.frame(lymphoid = rowSums(totalLymphoid))
-# the sum of 13 cell scores
-totalMyeloid = c(228, 219, 207, 235, 209, 220,221, 188, 192, 202, 239, 216, 222)
-totalMyeloid = finalMetaData[, totalMyeloid]
-totalMyeloid = data.frame(myeloid = rowSums(totalMyeloid))
-
-
-# tumor purity
-finalMetaData$TumorPurity[is.na(finalMetaData$TumorPurity)] <- mean(finalMetaData$TumorPurity, na.rm = T)
-
-tumorPurity = data.frame(tumorPurity = finalMetaData$TumorPurity)
-rownames(tumorPurity) = rownames(finalMetaData)
-tumorPurity = tumorPurity
-
-# merging data
-all(rownames(totalMyeloid) == rownames(tumorPurity))
-
-imm = cbind(tumorPurity, totalMyeloid, totalLymphoid)
-imm$myeloid[is.na(imm$myeloid)]  = mean(imm$myeloid, na.rm = T)
-imm$lymphoid[is.na(imm$lymphoid)]  = mean(imm$lymphoid, na.rm = T)
-
-# log2CPM
-log2CPM = edgeR::cpm(filtExpDat, log=TRUE)
-log2CPM = t(log2CPM[, colnames(log2CPM) %in% rownames(finalMetaData)])
-#____________________Spearman correlation: TEs and gene sig__________________#
-
-resSS = list()
-
-for(i in 1:ncol(log2CPM)){
-  resSS[[i]] <- cor(log2CPM[,i],t(ssgsea), method="spearman")
-  names(resSS)[i] = colnames(log2CPM)[i]
-}
-
-# correlation between gene sig and TEs
-genSigTE.corr = data.frame(do.call(rbind, resSS))
-rownames(genSigTE.corr) = names(resSS)
-
-
-
-#______________________________Lasso Regression________________________#
-library(glmnet)
-set.seed(20201215)
-
-# puting data togather
-d = cbind(log2CPM, imm)
-#Define predictor and response variables
-y <- t(ssgsea)[, 1]
-x <- as.matrix(d)
-#fit lasso regression model using k-fold cross-validation
-cv_model <- cv.glmnet(x, y, alpha = 1)
-best_lambda <- cv_model$lambda.min
-
-#display optimal lambda value
-best_lambda
-
-#view plot of test MSE's vs. lambda values
-plot(cv_model)
-
-#view coefficients of best model
-best_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
-coef(best_model)
-
-# store best variables
-c<-coef(best_model, s=best_lambda,exact=TRUE)
-inds<-which(c!=0)
-vars<-row.names(c)[inds]
-varsValue = c@x
-names(varsValue) = vars
-varsValue = varsValue[order(varsValue, decreasing = T)]
-#
-y_predicted <- predict(best_model, s = best_lambda, newx = x)
-
-#find SST and SSE
-sst <- sum((y - mean(y))^2)
-sse <- sum((y_predicted - y)^2)
-
-#find R-Squared
-rsq2 <- 1 - sse/sst
-rsq2
-
-#________________For loop for Lasso regression________________________#
-# empty list
-
-Pathway = c()
-lambda = c()
-R_Squared = c()
-feature = list()
-featureValue = list()
-
-dim = dim(t(ssgsea))[2]
-
-for( i in 1:dim){
-#Define predictor and response variables
-  y <- t(ssgsea)[, i]
-  x <- as.matrix(d)
-  Pathway[i] = colnames(t(ssgsea))[i]
-  #fit lasso regression model using k-fold cross-validation
-  cv_model <- cv.glmnet(x, y, alpha = 1)
-  best_lambda <- cv_model$lambda.min
-  lambda[i] = best_lambda
-  #view coefficients of best model
-  best_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
-  y_predicted <- predict(best_model, s = best_lambda, newx = x)
-  #find SST and SSE
-  sst <- sum((y - mean(y))^2)
-  sse <- sum((y_predicted - y)^2)
-  #find R-Squared
-  rsq <- 1 - sse/sst
-  R_Squared[i] = rsq
-  # variables
-  # store best variables
-  c = coef(best_model, s=best_lambda,exact=TRUE)
-  inds<-which(c!=0)
-  feature[[i]]<-row.names(c)[inds]
-  featureValue[[i]] = c@x
-}
-
-lassoResult = data.frame(Pathway = Pathway, lambda = lambda, R_Squared = R_Squared)
-
-# Adding feature and feature score
-lassoResult$feature <- NA
-lassoResult$featureScore <- NA
-
-for(i in 1:24){
-  lassoResult$feature[i] <- list(feature[[i]])
-  lassoResult$featureScore[i] <- list(featureValue[[i]])
-}
-```
-
-```{r working on ARID1A and its allies, echo=FALSE}
-# working on ARID1A and its allies
-grep("ARID1A",names(finalMetaData))
-#[1]  61 153 274 277
-
-table(finalMetaData$ARID1A)
-#no yes 
-#289 107
-
-table(finalMetaData$KDM6A)
-#no yes 
-#274 122 
-
-# subsetting expression matrix and clinical data
-rna = round(filtExpDat)
-rna = rna[, (colnames(rna) %in% finalMetaData$barcode)]
-rownames(finalMetaData) = finalMetaData$barcode
-df = read.csv("~/LINE1-BLCA/epistat.csv", row.names = 1)
-rna = rna[, rownames(df)]
-# drop 
-
-# DESeq object
-dds <- DESeqDataSetFromMatrix(countData = rna,
-                              colData = df,
-                              design = ~ EpiState)
-# prefilteration: it is not necessary but recommended to filter out low expressed genes
-
-keep <- rowSums(counts(dds)) >= 10
-dds <- dds[keep,]
-
-# normalized_count
-vsd <- counts(dds, normalized=TRUE)
-vsdLog = log2(vsd)
-
-# DE
-dds <- DESeq(dds)
-
-res <- results(dds, alpha = 0.1, lfcThreshold=0.58) 
-resOrdered <- res[order(abs(res$log2FoldChange), decreasing = T),]
-summary(resOrdered)
-
-#message("Result table on tumor vs matched-normal sample DE analysis")
-#resOrdered
-
-resDf = data.frame(resOrdered)
-resDf = na.omit(resDf)
-resDf = resDf[resDf$padj < 0.1,]
-resDf = resDf[abs(resDf$log2FoldChange) >= 0.58,]
-resDf = resDf[order(abs(resDf$log2FoldChange), decreasing = TRUE),]
-
-# adding data on class and family
-sigrmsk = rmkSub[rmkSub$repName %in% rownames(resDf),]
-sigrmsk = sigrmsk[!duplicated(sigrmsk$repName),]
-sigrmsk = data.frame(sigrmsk[, c(3,4,5)])
-rownames(sigrmsk) <- sigrmsk$repName
-resDf = merge(sigrmsk, resDf, by = 0)
-resDf = resDf[,-1]
-
-
-# LDA analysis
-# normalized_count
-vsd <- counts(dds, normalized=TRUE)
-vsdLog = log2(vsd)
-
-library(PCAtools)
-
-p = pca(vsd, metadata = df, removeVar = 0.1, scale = T)
-
-
-# onco exaptation and epigenetic states
-topChim = data1[data1$`TCGA Cancer` == "BLCA",]
-
-names(topChim)[1] = 'Transcript_ID'
-names(topChim)[4] = 'Candidate_Expression_FPKM'
-names(topChim)[2] = 'TCGA_Sample_ID'
-
-library(dplyr)
-library(tidyr)
-topChim = topChim %>% 
-    pivot_wider(names_from = TCGA_Sample_ID, values_from = Candidate_Expression_FPKM)
-topChim = data.frame(topChim, check.names = F)
-
-# setting names and stuff
-topChim = topChim[, -2]
-rownames(topChim) = topChim$Transcript_ID
-topChim = topChim[, -1]
-
-View(colSums(is.na(topChim)))
-
-# too many NAs in the dataset
-topChim[is.na(topChim)] <- 0
-
-#
-topChim = topChim[, colnames(topChim) %in% rownames(df)]
-table(rownames(df) %in% colnames(topChim))
-
-# reorder
-topChim = topChim[, rownames(df)]
-
-# heatmap
-library(pheatmap)
-cal_z_score <- function(x){
-  (x - mean(x)) / sd(x)
-}
- 
-data_subset_norm <- t(apply(topChim, 1, cal_z_score))
-# remove any NaN from the matrix
-data_subset_norm = na.omit(data_subset_norm)
-# drawing 
-pheatmap(data_subset_norm, annotation_col = df[,4, drop=FALSE])
-
-
-# numbers of events
-df$Row.names = rownames(df)
-d = merge(d, df, by = "Row.names")
-
-group_by(d, EpiState) %>%
-  summarise(
-    count = n(),
-    mean = round(mean(chimCount, na.rm = TRUE),2),
-    sd = round(sd(chimCount, na.rm = TRUE),2))
-
-
-res.aov <- aov(chimCount ~ EpiState, data = d)
-# Summary of the analysis
-summary(res.aov)
-
-# Tuky
-TukeyHSD(res.aov)
-
-```
-```{r KAPS analysis- using new algorithm to define subgroups, echo=FALSE}
-# need to have a dataframe with time, status, and covariates
-# covariates are log2CPM of TEs (intergenic + intronic)
-library(edgeR)
-# https://f1000research.com/articles/5-1408
-
-intTE = readRDS("~/LINE1-BLCA/REdiscoverTE_results_tcga/RE_intergenic_1_raw_counts.RDS")
-
-# converting column name to TCGA barcodes and removing non-TEs
-
-tableTPM <- table[colnames(intTE), ]
-# then save barcodes and assign them as colname for expression matrix
-colnames(intTE) = tableTPM$cases
-#
-teElements = rmkSub$repName[rmkSub$repClass %in% c("DNA", "LINE", "SINE", "LTR", "Retroposon")]
-intTE = intTE[rownames(intTE) %in% teElements,]
-# logCPM
-lcpm <- cpm(intTE, log=TRUE, prior.count = 5)
-lcpm = data.frame(t(lcpm), check.names = F)
-
-#
-tmp = finalMetaData[, c(282, 30,33)]
-
-names(tmp)[2] <- "status"
-names(tmp)[3] <- "time"
-
-tmp$status = as.numeric(ifelse(tmp$status == "Alive", 0,1))
-tmp$time = as.numeric(tmp$time)
-tmp$time[tmp$time <0] <- NA
-rownames(tmp) <- tmp$barcode
-
-# subsetting
-lcpm = lcpm[rownames(tmp),]
-all(rownames(lcpm) == rownames(tmp))
-
-lcpm = cbind(tmp, lcpm)
-lcpm = lcpm[, -1]
-lcpm = data.frame(lcpm, check.names = F)
-#encoding the column names
-encTENames = data.frame(orgName = colnames(lcpm[3:1054]),
-encID = paste0("TE_",seq(1:1052)))
-colnames(lcpm) <- NA
-
-colnames(lcpm) = c("status", "time", encTENames$encID)
-# calculating Cox univariate analysis
-covariates = colnames(lcpm)[3:1054]
-univ_formulas <- sapply(covariates, function(x) as.formula(paste('Surv(time,status)~', x)))
-
-# fitting model
-univ_models <- lapply( univ_formulas, function(x){coxph(x, data = lcpm)})
-
-# retriving values
-# Extract data 
-univ_results <- lapply(univ_models,
-                       function(x){ 
-                          x <- summary(x)
-                          p.value<-signif(x$wald["pvalue"], digits=2)
-                          wald.test<-signif(x$wald["test"], digits=2)
-                          beta<-signif(x$coef[1], digits=2);#coeficient beta
-                          HR <-signif(x$coef[2], digits=2);#exp(beta)
-                          HR.confint.lower <- signif(x$conf.int[,"lower .95"], 2)
-                          HR.confint.upper <- signif(x$conf.int[,"upper .95"],2)
-                          HR <- paste0(HR, " (", 
-                                       HR.confint.lower, "-", HR.confint.upper, ")")
-                          res<-c(beta, HR, wald.test, p.value)
-                          names(res)<-c("beta", "HR (95% CI for HR)", "wald.test", 
-                                        "p.value")
-                          return(res)
-                          #return(exp(cbind(coef(x),confint(x))))
-                         })
-res <- data.frame(t(as.data.frame(univ_results, check.names = FALSE)))
-res$FDR = p.adjust(res$p.value, method = "fdr")
-res$TE = rownames(res)
-
-# calculate speraman correlation with immune scores
-rownames(finalMetaData) <- finalMetaData$barcode
-finalMetaData = finalMetaData[rownames(lcpm),]
-all(rownames(finalMetaData) == rownames(lcpm))
-
-pcor = data.frame(cbind(lcpm[, (3:1054)], finalMetaData[, c(168:171)]), check.names = FALSE)
-
-cc = c()
-cp = c()
-cn = c()
-names(pcor)[1053:1056]
-#[1] "StromalScore"  "ImmuneScore"   "ESTIMATEScore" "TMEscore" 
-j = 1056
-for (i in 1:1052){
-    c = cor.test(pcor[,i],pcor[,j], method="pearson")
-    cc[i] = c$estimate
-    cp[i] = c$p.value
-    cn[i] = paste0(colnames(pcor)[i], "_", colnames(pcor)[j])
-}
-
-corRes = data.frame(TE = cn,
-                    coeff = cc,
-                    p_value = cp)
-
-stromalScore = corRes
-ImmuneScore = corRes
-ESTIMATEScore  = corRes
-TMEscore  = corRes
-
-corRes = data.frame(TE = colnames(pcor)[1:1052],
-                    stromalScore_cc = stromalScore$coeff,
-                    stromalScore_pv = stromalScore$p_value,
-                    ImmuneScore_cc = ImmuneScore$coeff,
-                    ImmuneScore_pv = ImmuneScore$p_value,
-                    ESTIMATEScore_pv = ESTIMATEScore$coeff,
-                    ESTIMATEScore_pv = ESTIMATEScore$p_value,
-                    TMEscore_pv = TMEscore$coeff,
-                    TMEscore_pv = TMEscore$p_value
-                    )
-
-d = data.frame(merge(corRes, res, by = "TE"))
-names(encTENames)[2] = "TE"
-d = data.frame(merge(encTENames, d, by = "TE"))
-write.csv(d, "~/LINE1-BLCA/sur_pearson_cor.csv")
-
-
-# selected TEs based on the scores
-s = c("MER57F", "L1ME3B", "MER65C", "MER126", "LTR62")
-
-# running KAPS
-require(kaps)
-colnames(lcpm) = c("status", "time", encTENames$orgName)
-
-f <- Surv(time, status) ~ MER57F+L1ME3B+MER65C+MER126+LTR62 
-fit2 <- kaps(f, data = lcpm, K= 2:4) 
-fit2
-
-```
-```{r GSVA epigenetics, echo = FALSE}
-#
-epi = data.table::fread("~/mysigdb/epigenetics_ENS.gmt")
-epi = reshape2::melt(epi, id.var = "V1")
-epi = epi[epi$value != "",]
-epi = epi[, c(1,3)]
-names(epi) = c("Pathway", "ENSEMBL")
-# converting symbols to ENS ids
-sym2ens <- AnnotationDbi::select(org.Hs.eg.db,
-                                    key=epi$ENS, 
-                                    columns="SYMBOL",
-                                    keytype="ENSEMBL")
-
-# removing duplicates
-sym2ens = sym2ens[!duplicated(paste0(sym2ens$SYMBOL, sym2ens$ENSEMBL)),]
-
-epi = dplyr::left_join(epi, sym2ens)
-epi = epi[, -2]
-# aggregating ids
-epi = aggregate(. ~ Pathway,epi, FUN = function(x) 
-      toString(x), na.action = NULL)
-write.csv(epi, "~/mysigdb/epigenetics_SYMBOL.gmt")
-
-#_____________________________________________________________________#
-epi <- fgsea::gmtPathways("~/mysigdb/epigenetics_ENS.gmt")
-
-
-for(i in 1:length(epi)){
-  epi[[i]][epi[[i]] == ""] <- NA
-  epi[[i]] = gsub(" ", "",epi[[i]] )
-  epi[[i]] <- na.omit(epi[[i]])
-}
-
-# show few lines from the pathways file
-head(epi)
-
-# gene expression matrix 
-gene = readRDS("~/LINE1-BLCA/REdiscoverTE_results_tcga/GENE_1_raw_counts.RDS")
-
-# convertig colum name to TCGA barcode
-# order table based on the colname in gene expression,
-tableTPM <- table[colnames(gene), ]
-# then save barcodes and assign them as colname for expression matrix
-colnames(gene) = tableTPM$cases
-
-#
-vsd = gene[, colnames(gene) %in% finalMetaData$barcode]
-rownames(finalMetaData) = finalMetaData$barcode
-
-all(rownames(finalMetaData) == colnames(vsd))
-
-es2 = ExpressionSet(assayData = as.matrix(vsd), 
-                   phenoData = AnnotatedDataFrame(finalMetaData))
-library(GSVA)
-es2GSVA <- GSVA::gsva(es2, epi, min.sz=1, 
-                            max.sz=500,
-                            method= "ssgsea",
-                            kcdf="Poisson")
-# epi pathways scores
-ssgsea = es2GSVA@assayData[["exprs"]]
-
-ssgsea = data.frame(t(ssgsea))
-
-ssgsea = ssgsea[rownames(lcpm),]
-#
-all(rownames(ssgsea)==rownames(lcpm))
-# correlation with TE profiles
-pcor = data.frame(cbind(lcpm[, (3:1054)], ssgsea), check.names = FALSE)
-
-cc = c()
-cp = c()
-cn = c()
-names(pcor)[1053:1072]
-#[1] "StromalScore"  "ImmuneScore"   "ESTIMATEScore" "TMEscore" 
-j = 1054
-for (i in 1:1052){
-    c = cor.test(pcor[,i],pcor[,j], method="pearson")
-    cc[i] = c$estimate
-    cp[i] = c$p.value
-    cn[i] = paste0(colnames(pcor)[i], "_", colnames(pcor)[j])
-}
-
-corRes = data.frame(TE = cn,
-                    coeff = cc,
-                    p_value = cp)
-
-corRes = corRes[order(corRes$coeff, decreasing = T),]
-sigTE = corRes$TE[1:12]
-sigTE = gsub('_ARID1A_string', "", sigTE)
-
-plotDF = pcor[,colnames(pcor) %in% c(sigTE,"ARID1A_string"),]
-plotDF = plotDF[, c(sigTE,"ARID1A_string")]
-
-library("ggpubr")
-p = vector(mode = "list", length = 12)
-for(i in 1:12){
-  p[[i]] = ggscatter(plotDF, x = names(plotDF)[i], y = "ARID1A_string", 
-          add = "reg.line",  
-          cor.coef = TRUE, cor.method = "pearson",
-          xlab = paste0(names(plotDF)[i], " expression"), ylab = "ARID1A pathway score")
-}
-
-ggarrange(p[[1]], p[[2]], p[[3]] , p[[4]],p[[5]],
-          p[[6]], p[[7]], p[[8]] , p[[9]],p[[10]], p[[11]],p[[12]],
-          ncol = 4, nrow = 3)
-
-df = read.csv("~/LINE1-BLCA/epistat.csv", row.names = 1)
-df = df[rownames(ssgsea),]
-
-df = data.frame(cbind(ssgsea, df), check.names = F)
-df = df[rownames(plotDF),]
-df = data.frame(cbind(df, plotDF), check.names = F)
-df = df[, -37]
-
-group_by(df, EpiState) %>%
-  summarise(
-    count = n(),
-    mean = round(mean(df[,26], na.rm = TRUE),2),
-    sd = round(sd(df[,26], na.rm = TRUE),2))
-
-# for survival
-df$cat_arid1A = ifelse(df$ARID1A_string <= 2.07, "low",
-                    ifelse(df$ARID1A_string >= 2.17, "high", NA))
-
-all(rownames(lcpm) == rownames(df))
-#[1] TRUE
-df$time = lcpm$time
-df$status = lcpm$status
-
-res.cox <- coxph(Surv(time, status) ~ cat_arid1A, data = df)
-res.cox
-
-# 
-res2 = res
-rownames(res2) = encTENames$orgName
-res2 = res2[rownames(res2) %in% sigTE,]
-
-```
-
-
-
-
-# ```{r chunk 48 violin plot for significnty dysregulted genes in subtypes, echo=FALSE}
-# # obtaining normalized count read
-# 
-# # BaSq_vs_LumAll
-# sample_idx <- colnames(ntd_norm) %in% rownames(subClin[subClin$cluster != "Neuronal",])
-# gene_idx <- rownames(ntd_norm) %in% sigRes$TE[sigRes$comparision == "BaSq_LumAll"]
-# df = ntd_norm[gene_idx, sample_idx]
-# dys_reg <- data.frame(t(df))
-# sampleName = rownames(dys_reg)
-# dys_reg = cbind(sampleName, dys_reg)
-# colnames(dys_reg) = c("sampleName", rownames(ntd_norm_sig))
-# dys_reg_melt = reshape2::melt(dys_reg, id.var = "sampleName")
-# #
-# dys_reg_melt$type = ifelse(dys_reg_melt$sampleName %in% subClin$barcode[subClin$cluster == "Basal_squamous"], "BaSq", "Lum")
-# 
-# # write.table to import in python
-# write.table(dys_reg_melt, file = "~/LINE1-BLCA/Basq_vs_LumAll.csv", sep = ",", row.names = F)
-# 
-# # BaSq_vs_Neur
-# sample_idx <- colnames(ntd_norm) %in% rownames(subClin[subClin$cluster %in% c("Neuronal","Basal_squamous") ,])
-# gene_idx <- rownames(ntd_norm) %in% sigRes$TE[sigRes$comparision == "BaSq_Neu"]
-# df = ntd_norm[gene_idx, sample_idx]
-# dys_reg <- data.frame(t(df))
-# sampleName = rownames(dys_reg)
-# dys_reg = cbind(sampleName, dys_reg)
-# colnames(dys_reg) = c("sampleName", rownames(ntd_norm_sig))
-# dys_reg_melt = reshape2::melt(dys_reg, id.var = "sampleName")
-# #
-# dys_reg_melt$type = ifelse(dys_reg_melt$sampleName %in% subClin$barcode[subClin$cluster == "Basal_squamous"], "BaSq", "Neu")
-# 
-# # write.table to import in python
-# write.table(dys_reg_melt, file = "~/LINE1-BLCA/Basq_vs_Neu.csv", sep = ",", row.names = F)
-# 
-# # analysis was done in Google colab
-# ```
-
-
-## TE exclusively expressed in one of the comparision group
-
-In general transcription is a pervasive process and the majority of the genes are transcribed at a low level in most tissues in the body. So it is the transcripts that are diffrentially expressed in a particular tissue/condition that can give it its' 'character', though. However , for TE elements we dont know to what extent this statement can be true. 
-https://www.biostars.org/p/330827/
-
-
-## Clustering
-## Correlation analysis with Gene expression
-## Correlation analysis with Methylation platform
-## Network analysis
-

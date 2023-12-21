@@ -18,6 +18,35 @@ survAnalysisOnExpMat <- function(expressionMatrix, clinicalData, timeColumn, eve
   }
   library(survminer)
   
+  if (!requireNamespace("SummarizedExperiment", quietly = TRUE)) {
+    BiocManager::install("SummarizedExperiment")
+  }
+  library(SummarizedExperiment)
+  
+  # create se object
+  # Convert the expression matrix to a SummarizedExperiment object
+  expr_se <- SummarizedExperiment(assays = list(counts = as.matrix(expressionMatrix)),
+                                  colData = DataFrame(clinicalData))
+  
+  # Check if clinical data has any non-tumor samples
+  non_tumor_samples <- substr(rownames(colData(expr_se)), 14, 14) == "1"
+  
+  if (any(non_tumor_samples)) {
+    message("There are non-tumor samples present in the clinical dataset; those will be removed from both clinical and expression matrix.")
+    # Remove non-tumor samples
+    filtered_expr_se <- expr_se[, !non_tumor_samples]
+  }
+  
+  # extract elements
+  # Extract colData from the filtered SummarizedExperiment
+  clinicalData <- as.data.frame(colData(filtered_expr_se))
+  # Extract the expression matrix from the filtered SummarizedExperiment
+  expressionMatrix <- assays(filtered_expr_se)$counts
+  
+  if(nrow(clinicalData) != ncol(expressionMatrix)){
+    stop("The number of samples in clinical data and expression matrix is not the same.")
+  }
+  
   # Creating survival data
   barcode = clinicalData$barcode
   if(all(clinicalData[[eventColumn]]) %in% c(0, 1)){
@@ -27,6 +56,7 @@ survAnalysisOnExpMat <- function(expressionMatrix, clinicalData, timeColumn, eve
                    ifelse(clinicalData[[eventColumn]] == "Dead", 1, NA))
   }
   
+  
   time = as.numeric(clinicalData[[timeColumn]])
   survData <- data.frame(barcode = barcode, event = event, time = time)
   
@@ -34,14 +64,12 @@ survAnalysisOnExpMat <- function(expressionMatrix, clinicalData, timeColumn, eve
   # first transpose the expression matrix
   message("Processing expression matrix...")  
   expressionMatrix <- t(expressionMatrix)
-  expressionMatrix <- expressionMatrix[survData$barcode,]
   
   if (all(rownames(expressionMatrix) == survData$barcode)) {
     survData <- cbind(survData, expressionMatrix)
   } else {
     stop("The order of samples in expression matrix and clinical data are not matched")
   }
-  
   # Determine the optimal cutpoint of variables
   message("Categorizing expression values into low and high expression ")  
   res.cut <- surv_cutpoint(survData, time = "time", event = "event",
