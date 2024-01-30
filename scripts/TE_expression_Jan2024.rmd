@@ -1,0 +1,3262 @@
+---
+title: "Transposable element expression in TCGA-BLCA"
+author: "Hamid Ghaedi, Andrew Garvin"
+date: "2023-12-01"
+output: html_document
+---
+
+```{r setup, include=TRUE, cache = FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_knit$set(root.dir = "G:/LINE1-BLCA/")
+# work from Home Station
+#root_path = "C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/"
+# work from Work Station
+root_path = "G:/LINE1-BLCA/"
+
+```
+
+## 1. Basic statistics
+
+Previous reports suggest that \~1% of all RNA-seq read counts map to the TE elements in cancer samples. Since BLCA suggested to be one of the malignancies which shows global increase in TE element expression, total number of reads map to TE element in this cancer should be more than 1%.
+
+```{r chunk2 libraries and helper functions, echo=FALSE, include=FALSE}
+# libs
+suppressWarnings(library(kableExtra))
+suppressWarnings(library(magrittr))
+suppressWarnings(library(edgeR))
+suppressWarnings(library(survival))
+suppressWarnings(library(survminer))
+suppressWarnings(library(tidyverse))
+suppressWarnings(library(GSVA))
+suppressWarnings(library(DESeq2))
+suppressWarnings(library(org.Hs.eg.db))
+suppressWarnings(library(progress))
+suppressWarnings(library(PerformanceAnalytics))
+suppressWarnings(library(glmnet))
+
+# obtaining required objects :
+# 1. sample name mapping object ------------------------------------------------------------
+#id_map <- readRDS("LINE1-BLCA/r_objects/id_map.RDS")
+# The above object was obtaing following the code below
+## suppressWarnings(library(TCGAbiolinks))
+## 
+## query <- GDCquery(project = c("TCGA-BLCA"),
+##                   data.category = "Sequencing Reads")
+## table <- getResults(query)
+## id_map <- read.csv("~/LINE1-BLCA/id_mapp.csv")
+## id_map <- id_map[, c("cases", "file_name")]
+## id_map$shortFileName <- stringr::str_split(id_map$file_name, "_", simplify = TRUE)[, 1]
+# -----------------------------------------------------------------------------------------
+
+# 2. Repeatmasker annotation file and its subset for TEs------------------------------------
+te_rmk <- readRDS(paste0(root_path, "/r_objects/te_rmk.RDS"))
+
+#
+intergenicTE_rmk <- data.frame(data.table::fread(paste0(root_path,"/te_intergenic_rmsk.tsv")))
+
+
+intergenicTE_rmk <- readRDS(paste0(root_path,"/r_objects/intergenicTE_rmk.RDS"))
+
+# TE rep name in the rmk object
+#TErepName <- te_rmk$repName
+# The above object was created by subset rmk to retain TEs : LINE, SINE, LTR, Retroposon and DNA
+##rmk = readRDS("~/LINE1-BLCA/r_objects/rmsk_annotation.RDS") 
+##te_rmk <- rmk[rmk$repClass %in% c("LINE", "SINE", "LTR", "Retroposon" ,"DNA"),]
+##--------------------------------------------------------------------------------------------
+
+# 3. clinical data 
+clinical_data <- readRDS(paste0(root_path, "/r_objects/clinical.rds"))
+
+
+
+# LOADING HELPER FUNCTIONS
+
+
+## Path to functions
+func_path <- "C:/Users/User1/Documents/Transposons_Exp_BLCA_GitHub/scripts/rFunctions/"
+rFuncs <- list.files(func_path, pattern = "\\.R$", full.names = TRUE)
+
+for(func in rFuncs){
+  
+  cat("loading ", basename(func), " \n")
+  source(func)
+}
+
+## Documentation are written using document::document(file_name = path, check_package = FALSE)
+## List .R files
+#rFuncs <- list.files(func_path, pattern = "\\.R$", full.names = TRUE)
+
+## Iterate through functions
+#for (func in rFuncs) {
+#  cat("\n", "Creating document for ", func, ". \n")
+#  document::document(func, check_package = FALSE)
+#}
+
+
+
+```
+
+```{r chunk3 reading expression data, echo=FALSE, include=FALSE}
+# preprocess all of the expression matrix and store them under matrices directory
+
+# matrices for REdiscoverTE
+# unprocessed_mtx <- list.files("LINE1-BLCA/REdiscoverTE_results_tcga/", pattern = "RDS")
+# 
+# for(mtx in unprocessed_mtx){
+#   if (startsWith(mtx, "RE_")){
+#     #cat("TE file", mtx, "\n")
+#     tmp <- ex.preProc(readRDS(paste0("LINE1-BLCA/REdiscoverTE_results_tcga/",mtx)), is_TE = TRUE)
+#     saveRDS(tmp,paste0("LINE1-BLCA/preProc_tcag_matrices/",mtx)) 
+#   }else{
+#     cat("NOT TE file", mtx, "\n")
+#     tmp <- ex.preProc(readRDS(paste0("LINE1-BLCA/REdiscoverTE_results_tcga/",mtx)), is_TE = FALSE)
+#     saveRDS(tmp,paste0("LINE1-BLCA/preProc_tcag_matrices/",mtx)) 
+#   }
+# }
+
+
+# read preprocessed expression matrics in R 
+preProc_matx <- list.files(paste0(root_path,"preProc_tcag_matrices/"), pattern = "RDS")
+# Read each RDS file and assign to an object with a name without the file type extension
+for (mtx in preProc_matx) {
+  # Remove file type extension and assign to an object with the same name
+  assign(sub("\\.RDS$", "", mtx), readRDS(paste0(root_path,"/preProc_tcag_matrices/", mtx)))
+}
+
+
+```
+
+```{r chunk4 reading data2, echo=FALSE}
+
+# About TCGA barcode 
+# TCGA-02-0001-01c-01d-0182-01 =  project name + TSS + patricipant + sample + vial + portion + analyte + plate+ center
+
+## TCGA: project name
+## TCGA-02: project name + TSS (Tissue Source Site)
+## TCGA-02-0001:project name + TSS + patricipant
+## TCGA-02-0001-01: project name + TSS + patricipant + sample [Tumors 01 - 09,normal 10 - 19, ctls  20 - 29]
+## TCGA-02-0001-01c: project name + TSS + patricipant + sample + vial
+## TCGA-02-0001-01c-01: project name + TSS + patricipant + sample + vial + portion
+## TCGA-02-0001-01c-01d: project name + TSS + patricipant + sample + vial + portion + analyte
+## TCGA-02-0001-01c-01d-0182: project name + TSS + patricipant + sample + vial + portion + analyte + plate
+## TCGA-02-0001-01c-01d-0182-01: project name + TSS + patricipant + sample + vial + portion + analyte + plate+ center
+
+
+# normal tissue barcode
+# 19 NATs
+barcodeNorm_all <- rownames(clinical_data)[as.numeric(substr(rownames(clinical_data),14,15)) > 10]
+# particpants with NATs samples
+p_NATs <- substr(barcodeNorm_all,9,12)
+# tumor barcode
+barcodeTumor_all <- rownames(clinical_data)[as.numeric(substr(rownames(clinical_data),14,15)) < 10]
+# tumor samples with NATs
+barcodeTumor_wMatchedNorm <- barcodeTumor_all[grep(paste(p_NATs, collapse="|"), barcodeTumor_all)]
+
+
+# for one normal barcode ""TCGA-BL-A13J-11A-13R-A10U-07"", 
+# there are three tumor barcodes:
+# "TCGA-BL-A13J-01A-11R-A10U-07"
+# "TCGA-BL-A13J-01B-04R-A277-07"
+# "TCGA-BL-A13J-01A-11R-A277-07"
+# So the number of samples in tumor group will be higher .
+
+
+# ALL counts
+TECountAll = colSums(RE_intergenic_1_raw_counts)
+GeneCountAll = colSums(GENE_1_raw_counts)
+# means
+avgTECountAll = mean(colSums(RE_intergenic_1_raw_counts))
+avgGeneCountAll = mean(colSums(GENE_1_raw_counts))
+
+# TE percent count in all samples
+PercentTECountAll = round((100*(sum(TECountAll)/(sum(TECountAll) + sum(GeneCountAll)))),2)
+
+
+# Normal counts
+#
+tmpTE = RE_intergenic_1_raw_counts[, colnames(RE_intergenic_1_raw_counts) %in% barcodeNorm_all]
+tmpGe = GENE_1_raw_counts[, colnames(GENE_1_raw_counts) %in% barcodeNorm_all]
+# count
+TECountNorm = colSums(tmpTE)
+GeneCountNorm = colSums(tmpGe)
+# means
+avgTECountNorm = mean(colSums(tmpTE))
+avgGeneCountNorm = mean(colSums(tmpGe))
+
+# TE percent count in normal samples
+PercentTECountNorm = round((100*(sum(TECountNorm)/(sum(TECountNorm) + sum(GeneCountNorm)))),2)
+
+# Tumor counts
+tmpTE = RE_intergenic_1_raw_counts[, colnames(RE_intergenic_1_raw_counts) %in% barcodeTumor_all]
+tmpGe = GENE_1_raw_counts[, colnames(GENE_1_raw_counts) %in% barcodeTumor_all]
+
+# counts
+TECountTumor = colSums(tmpTE)
+GeneCountTumor = colSums(tmpGe)
+# means
+avgTECountTumor = mean(colSums(tmpTE))
+avgGeneCountTumor = mean(colSums(tmpGe))
+
+# TE percent count in Tumor
+PercentTECountTumor = round((100*(sum(TECountTumor)/(sum(TECountTumor) + sum(GeneCountTumor)))),2)
+
+#______________ Tabulation of the mertics
+Sample = c("Normal[n= 19]", "Tumor [n= 414]", "All [n= 433]")
+librarySize = c(c(sum(TECountNorm) + sum(GeneCountNorm)/19), 
+                c(sum(TECountTumor) + sum(GeneCountTumor)/414),
+                c(sum(TECountAll) + sum(GeneCountAll))/433)
+AverageTE_count = c(avgTECountNorm,avgTECountTumor, avgTECountAll)
+AverageGene_count = c(avgGeneCountNorm,avgGeneCountTumor, avgGeneCountAll)
+PercentTE_count = c(PercentTECountNorm,PercentTECountTumor, PercentTECountAll)
+
+res = data.frame(Sample = Sample,
+                 Avg.RNA_reads_M = round(librarySize/1000000,2),
+                 Avg.TE_count_M =round(AverageTE_count/1000000,2),
+                 Avg.Gene_count_M = round(AverageGene_count/1000000,2),
+                 PercentTE_count = PercentTE_count)
+
+# res = data.frame(Sample = Sample,
+#                  Avg.RNA_reads = round(librarySize),
+#                  Avg.TE_count =round(AverageTE_count),
+#                  Avg.Gene_count = round(AverageGene_count),
+#                  PercentTE_count = PercentTE_count)
+
+
+res %>%
+  kable(format = "html", col.names = colnames(res)) %>%
+  kable_styling() %>%
+  kable_classic(full_width = F, html_font = "Cambria")
+
+```
+
+#### 1.1 TE expression considering their loci
+
+TE elements scattered through the genome and can be find as inter-genic or itra-genic elements. Further in a gene domain, TE can be found either in exons (exonic TE) or introns (intronic TE). Classifying TE elements into these three groups can help to distinguish autonomous TE expression from co-expression with host genes or intron retention.
+
+```{r chunk5 reading data loci-wise, echo=FALSE}
+# exonicTE count all  samples, echo=FALSE
+# counts
+TECountAll = colSums(RE_all_1_raw_counts)
+exonTECountAll = colSums(RE_exon_1_raw_counts)
+# means
+avgTECountAll = mean(colSums(RE_all_1_raw_counts))
+avgExTeCountAll = mean(colSums(RE_exon_1_raw_counts))
+
+# TE percent count
+PercentExTECountAll = round(100*(sum(exonTECountAll)/sum(TECountAll)),2)
+
+# intronicTE count all  samples
+# counts
+intronTECountAll = colSums(RE_intron_1_raw_counts)
+# means
+avgIntroTeCountAll = mean(colSums(RE_intron_1_raw_counts))
+
+# TE percent count
+PercentIntroTECountAll = round(100*(sum(intronTECountAll)/sum(TECountAll)),2)
+
+# intergenicTE count all  samples
+intGenTECountAll = colSums(RE_intergenic_1_raw_counts)
+# means
+avgIntGenTeCountAll = mean(colSums(RE_intergenic_1_raw_counts))
+
+# TE percent count
+PercentIntGenTECountAll = round(100*(sum(intGenTECountAll)/sum(TECountAll)),2)
+
+# tabulation
+TE_type = c("Exonic", "Intronic", "Intergenic")
+AverageTE_count = c(avgExTeCountAll,avgIntroTeCountAll, avgIntGenTeCountAll)
+PercentTE_count = c(PercentExTECountAll,PercentIntroTECountAll, PercentIntGenTECountAll)
+
+res = data.frame(TE_type = TE_type,
+                 AverageCount_M = round(AverageTE_count/1000000,2),
+                 PercentTE_count = PercentTE_count)
+
+
+res %>%
+  kable(format = "html", col.names = colnames(res)) %>%
+  kable_styling() %>%
+  kable_classic(full_width = F, html_font = "Cambria")
+
+```
+
+#### 1.2 TE expression count considering family/class
+
+TEs have five different classes: LINE, SINE, long terminal repeats (LTR), SVA, and DNA transposons. We want to know which class/family has expression in BLCA.
+
+```{r chunk6 subfamily/family/class, echo=FALSE, include=FALSE}
+
+# create a dataframe to visulaize 
+unique_te_rmk <- unique(te_rmk[,3:5]) # the number of rows here are > 1052 , means some elements were assigned to more than one repFamily
+
+# Function to process expression matrix for a specific loci
+process_loci <- function(TE_matrix, loci_name, sampleType) {
+  tmp <- data.frame(repName = rownames(TE_matrix)) %>%
+    left_join(unique_te_rmk) %>%
+    mutate(loci = loci_name,
+           sample = sampleType)
+  
+  return(tmp)
+}
+
+# Process each expression matrix
+expTe_loci <- bind_rows(
+  process_loci(RE_intergenic_1_raw_counts, "intergenic", "all"),
+  process_loci(RE_intron_1_raw_counts, "intron", "all"),
+  process_loci(RE_exon_1_raw_counts, "exon", "all"),
+  process_loci(RE_intergenic_1_raw_counts[,colnames(RE_intergenic_1_raw_counts) %in% barcodeTumor_all], "intergenic", "TP"),
+  process_loci(RE_intergenic_1_raw_counts[,colnames(RE_intergenic_1_raw_counts) %in% barcodeTumor_all], "intron", "TP"),
+  process_loci(RE_intergenic_1_raw_counts[,colnames(RE_intergenic_1_raw_counts) %in% barcodeTumor_all], "exon", "TP"),
+    process_loci(RE_intergenic_1_raw_counts[,colnames(RE_intergenic_1_raw_counts) %in% barcodeNorm_all], "intergenic", "NT"),
+  process_loci(RE_intergenic_1_raw_counts[,colnames(RE_intergenic_1_raw_counts) %in% barcodeNorm_all], "intron", "NT"),
+  process_loci(RE_intergenic_1_raw_counts[,colnames(RE_intergenic_1_raw_counts) %in% barcodeNorm_all], "exon", "NT"),
+)
+
+# count per repClass
+expTe_loci$combinedLociSample <- paste0(expTe_loci$loci,"_", expTe_loci$sample)
+# res vis
+res <- data.frame(unclass(table(expTe_loci$repClass, expTe_loci$combinedLociSample)))
+cln <- c("Exonic TEs(all samples)", "Exonic TEs(NT samples)","Exonic TEs(TP samples)",
+         "Intergenic TEs(all samples)", "Intergenic TEs(NT samples)","Intergenic TEs(TP samples)",
+         "Intronic TEs(all samples)", "Intronic TEs(NT samples)","Intronic TEs(TP samples)")
+
+
+res <- res[,c(1,7,4)]
+cln <- c("Exonic", "Intronic", "Intergenic")
+
+```
+
+```{r chunk6 subfamily/family/class vis, echo=FALSE}
+res %>%
+  kable(format = "html", col.names = cln) %>%
+  kable_styling() %>%
+  kable_classic(full_width = F, html_font = "Cambria")
+```
+
+```{r chunk explorotory data analysis, echo=FALSE}
+library(DESeq2)
+library(PCAtools)
+clinical_data<- clinical_data[colnames(RE_intergenic_1_raw_counts),]
+
+# Creating DESeqDataSet without an explicit design formula
+dds <- DESeqDataSetFromMatrix(countData = round(RE_intergenic_1_raw_counts),
+                              colData = clinical_data,  
+                              design = ~ 1)    # No experimental design
+# Prefiltering
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+# Data Transformation (rlog)
+TE_vst <-assay(varianceStabilizingTransformation(dds))
+
+# Plotting PCA
+p <- pca(TE_vst, metadata = clinical_data, removeVar = 0.2, scale = TRUE)
+biplot(p, showLoadings = FALSE, labSize = 3, pointSize = 5, sizeLoadingsNames = 5)
+
+# calculate z score for PC1
+z_score <- scale(p$rotated[,1])
+# index
+idx <- abs(z_score) >= 3
+# samples with absolute value >= 3, should be removed
+
+outlier_samples <-colnames(TE_vst)[idx] 
+
+# # genes
+# dds <- DESeqDataSetFromMatrix(countData = round(GENE_1_raw_counts),
+#                               colData = clinical_data,  
+#                               design = ~ 1)    # No experimental design
+# # Prefiltering
+# keep <- rowSums(counts(dds)) >= 10
+# dds <- dds[keep,]
+# GENE_vst <-assay(vst(dds))
+# 
+# # PCA 
+# 
+# # Outlier is a sample with |zscore(PC1)| > 3
+# biplot(p, showLoadings = TRUE,
+#     labSize = 5, pointSize = 5, sizeLoadingsNames = 5)
+
+
+RE_intergenic_1_raw_counts <- RE_intergenic_1_raw_counts[, -which(colnames(RE_intergenic_1_raw_counts) %in% outlier_samples)]
+
+clinical_data <- clinical_data[-which(rownames(clinical_data) %in% outlier_samples),]
+```
+
+## 2. Steps in TE signature development.
+
+In order to develop a TE signature, we followed the steps outlined below:
+
+(I) Feature selection (FS).
+
+(II) TE Signature development.
+
+(III) Signature validation
+
+#### 2.1 Feature selection (FS)
+
+
+To select TEs for use in signature development, we were interested in a set of TEs whose expression levels were significantly associated with OS probability and also show strong correlation with at least one molecular phenotype of interest.
+
+##### 2.1.1 Significantly associated with overall survival probability (OS)
+
+Through fitting a univariate Cox regression model to the data we defined survival-associated TEs, as TEs with a p-value < 0.05, with a false discovery rate set at 5%. We found 270 such TEs from 23 repFamilies
+
+**Note**
+
+Since the expression data were categorized into low and high expression, the Cox model considers 'highExp' as the reference level, and the provided Hazard Ratio (HR) is related to the 'low-exp' category compared to the reference level. So a Hazard Ratio (HR) smaller than 1 indicates 'low-exp' group compared to the reference group has smaller HR. So for that given gene, increase in expression (highExp category) will have unfavorable effect on OS.
+
+```{r chunk7  TE signature development survival analysis at repName level, echo=FALSE, include=FALSE}
+# expression data normalization
+## set order as in expression matrix
+clin <- clinical_data[colnames(RE_intergenic_1_raw_counts) ,]
+#all(rownames(clin) == colnames(RE_intergenic_1_raw_counts))
+#1] TRUE
+
+
+# Convert the matrix to a DGEList object
+dge <- DGEList(counts = RE_intergenic_1_raw_counts,
+               samples = clin)
+# Perform library size normalization using the RLE algorithm
+dge <- calcNormFactors(dge, method = "RLE")
+# Obtain log2CPM with a prior count of 5
+prior_count <- 5
+log2CPM <- cpm(dge, prior.count = prior_count, log = TRUE)
+#saveRDS(log2CPM, "te_cpm.RDS")
+
+# Now log2CPM contains the normalized expression values with log2 transformation and prior count
+# You can access the normalized data using log2CPM$table
+expMat_tcga_intergenic_logCPM <- t(log2CPM)
+
+# re-set orders
+expMat_tcga_intergenic_logCPM <- expMat_tcga_intergenic_logCPM[rownames(clinical_data),]
+
+# performing surv analysis 
+surv_summary <- survAnalysisOnExpMat(expressionMatrix = log2CPM, 
+                                     clinicalData = clin,
+                                     timeColumn ="paper_Combined.days.to.last.followup.or.death",
+                                      eventColumn = "paper_Vital.status")
+
+# Selected TEs
+table(surv_summary$FDR <= 0.05)
+# selected TEs based on FDR <= 0.01
+surv_tes_fdr_0.01 <- surv_summary$var_name[surv_summary$FDR <= 0.01]
+surv_tes_fdr_0.05 <- surv_summary$var_name[surv_summary$FDR <= 0.05]
+
+# identify repfamily for surv TEs
+dedup_intergenicTE_rmk <- intergenicTE_rmk[!duplicated(intergenicTE_rmk$RepName),]
+
+tmp <- left_join(surv_summary, dedup_intergenicTE_rmk, by = c("var_name" = "RepName"))
+
+# for vis
+vis_dat = tmp
+vis_dat$repFamily <- gsub("\\?", "", vis_dat$repFamily)
+
+# Since data are categirize into low and high expression, coc consider lowExp as refrence level and the provided HR is related to the low-exp catgory, so HR >= 1, inocate hazard ratio for lowExp group. On the other hand when HR is < 1 for lowExp group, increase in expression of that gene has unfavorable effect
+
+vis_dat <- vis_dat %>%
+  filter(FDR <= 0.05) %>%
+  mutate(Effect = ifelse(Hazard_Ratio < 1, "Unfavorable", "favorable")) %>%
+  group_by(repFamily, Effect) %>%
+  summarize(
+    TE_count = n(),
+    repNames = paste(var_name, collapse = ", ")
+  ) %>%
+  ungroup() 
+
+#
+tmp <- tmp[tmp$var_name %in% surv_tes_fdr_0.05, ]
+
+```
+
+```{r chunk7  TE signature development survival analysis at repName level vis, echo=FALSE}
+vis_dat[1:9,] %>%
+  kable(format = "html") %>%
+  kable_styling() %>%
+  kable_classic(full_width = F, html_font = "Cambria") %>%
+  add_header_above(c("TEs associated with survival probability (#repName= 270, #repFamily = 37)" = 4))
+```
+
+```{r chunk8  TE signature development FS-I: survival analysis at repFamily level, echo=FALSE, include=FALSE}
+# This chunk analysis was performed with thoe hope that we can see that when surv associated TEs are at repFamily level,still they show significant association with survival. 
+
+sigTE_log2CPM <- log2CPM[rownames(log2CPM) %in% surv_tes_fdr_0.05,]
+
+#
+TE_fam_expMat_logCPM <- aggregate_repName2repFamily(sigTE_log2CPM, te_rmk)
+
+
+
+all(rownames(clinical_data) %in% colnames(TE_fam_expMat_logCPM))
+
+#1] TRUE
+TE_fam_expMat_logCPM <- TE_fam_expMat_logCPM[, rownames(clinical_data)]
+#
+all(rownames(clinical_data) == colnames(TE_fam_expMat_logCPM))
+
+
+# Running survival analysis 
+surv_summary_repFamily <- survAnalysisOnExpMat(expressionMatrix = TE_fam_expMat_logCPM, 
+                                     clinicalData = clinical_data,
+                                     timeColumn ="paper_Combined.days.to.last.followup.or.death",
+                                      eventColumn = "vital_status")
+
+
+
+# Selected TEs
+table(surv_summary_repFamily$FDR <= 0.01)
+# selected TEs based on FDR <= 0.01
+surv_tes_fam_fdr_0.01 <- surv_summary_repFamily$var_name[surv_summary_repFamily$FDR <= 0.01]
+surv_tes_fam_fdr_0.05 <- surv_summary_repFamily$var_name[surv_summary_repFamily$FDR <= 0.05]
+
+# to check what repName in which repFamily has contributed to the aggregate expression
+tmp <- unique(intergenicTE_rmk[, c("RepName","RepClass","repFamily")])
+tmp$surv_associated <- ifelse(tmp$RepName %in% surv_tes_fdr_0.05, "survTE", "noSurvTE")
+# remove trailing "?" at the end of family name
+tmp$repFamily <- gsub("\\?", "", tmp$repFamily)
+#To see which member of which family is surv assoictaed TE
+table(tmp$repFamily, tmp$surv_associated)
+# save family with at least one surv associated TEs
+sigFamTE <- unique(tmp$repFamily[tmp$surv_associated=="survTE"])
+
+```
+
+##### 2.1.2 TEs significantly correlated with intrested phenotype
+
+We considered a TE to be correlated with the molecular phenotype of interest if a significant correlation, defined as |Pearson correlation coefficient| ≥ 0.4 at a FDR as 5%, could be established between the expression level of that TE and at least one of the bladder epithelial differentiation signatures (John P. Sfakianos et al.), immune infiltration signatures (Combes et al. and Immport db), and chromatin-modifying gene regulon signatures (IntAct and String db).
+
+We identified a total of 185 TEs correlated with interested molecular phenotype.
+
+```{r chunk9  TE signature development  FS-II: gene sig cor with TEs, echo=FALSE}
+
+# What to choose as TE expression set:
+# 0 all TEs
+all_TEs <- t(log2CPM)
+# 1 TEs at repName level
+sig_TEs <- t(log2CPM[rownames(log2CPM) %in% surv_tes_fdr_0.05,])
+# 2 TEs at repFamily level , repNames are aggregated at the family level
+sig_TEs_fam <- t(TE_fam_expMat_logCPM)
+# 3 PCA score for each family
+
+#____________________________________GSVA___COR______survTEs___________________________________#
+# TEs need to be grouped at repFamily level for correlation analysis
+
+## for GVSA analysis we use master gene list
+master_geneList <- readRDS(paste0(root_path, "r_objects/master_gene_list.RDS"))
+
+# an index to select gene list of intrest
+idx <- c(1:80) # from 1 to 80 are the intrested gene lists
+# create a subset
+sub_master_geneList <- master_geneList[1:80]
+
+## normalizing expression matrix
+
+# # exp matrix
+# data <- round(GENE_1_raw_counts)
+# data <- data.frame(data[, rownames(clinical_data)])
+# 
+# # convert rownames from ENsembl to Gene symbol
+# ens2symbol <- AnnotationDbi::select(org.Hs.eg.db,
+#                                     key=rownames(data),
+#                                     columns="SYMBOL",
+#                                     keytype="ENSEMBL")
+# ens2symbol <- ens2symbol[ens2symbol$ENSEMBL %in% rownames(data),]
+# ens2symbol <- left_join(ens2symbol, data.frame(ENSEMBL = rownames(data),ROWNAME = rownames(data) ))
+# ens2symbol <- ens2symbol[!duplicated(ens2symbol$ROWNAME),]
+# 
+# ## collapse rows with same name
+# data$ENSEMBL <- rownames(data)
+# ## left join
+# data <- left_join(data, ens2symbol)
+# ## drop unnecessary columns
+# data <- data[, -which(colnames(data) %in% c("ENSEMBL", "ROWNAME"))]
+# If there are duplicates, calculate the mean
+# df <- data %>%
+#   group_by(SYMBOL) %>%
+#   summarise_all(mean)
+# #
+# data <- data.frame(df)
+# rm(df)
+# # setting rowname
+# data <- data[!is.na(data$SYMBOL),]
+# # set rownames
+# rownames(data) <- data$SYMBOL
+# # dropp symbol
+# data <- data[, -which(names(data) == "SYMBOL")]
+# # replace dots with "-"
+# colnames(data) = gsub('[.]', "-", colnames(data))
+# #
+# data <- round(data)
+
+
+
+# VST
+#data.vst <- varianceStabilizingTransformation(as.matrix(data), blind = TRUE, fitType = "parametric")
+# save results in an object
+#saveRDS(data.vst, "C:/Users/qaedi/OneDrive - Queen's University/Documents/LINE1-BLCA/r_objects/vst_normalized_all_gene_expMat_tcga.RDS")
+# reading data back
+data.vst <- readRDS(paste0(root_path,"r_objects/vst_normalized_all_gene_expMat_tcga.RDS"))
+
+
+# running GSVA
+# data.gsva <- gsva(data.vst,
+#                   master_geneList, # Running only on a subset of the gene list
+#                   mx.diff=FALSE,
+#                   verbose=TRUE,
+#                   min.sz=3,
+#                   max.sz=500,
+#                   method= "ssgsea",
+#                   kcdf="Poisson")
+#
+#saveRDS(data.gsva, "C:/Users/qaedi/OneDrive - Queen's #University/Documents/LINE1-BLCA/r_objects/data.gsva_3k_pathways.RDS")
+# load
+
+data.gsva <- readRDS(paste0(root_path, "r_objects/data.gsva_3k_pathways.RDS"))
+# transpose dataframe
+data.gsva <- data.frame(t(data.gsva))
+
+
+#____________________________________GSVA___COR______survTEs___________________________________#
+## normalize TEs through vst
+#te.vst <- varianceStabilizingTransformation(as.matrix(round(RE_exon_1_raw_counts)), blind = TRUE, fitType = "parametric")
+#te.vst <- t(te.vst)
+
+
+# making sure about the row names
+data.gsva <- data.gsva[rownames(sig_TEs),]
+#data.gsva <- data.gsva[rownames(sig_TEs_fam),]
+
+# correlation
+#cor_all_TE_repName_gsva <- correlateMatrix(all_TEs, data.gsva[, c(1:77)]) #77 selected pathways
+#cor_sig_TE_repName_gsva <- correlateMatrix(sig_TEs, data.gsva[, c(1:77)]) #77 selected pathways
+#cor_sig_TE_repFamily_gsva <- correlateMatrix(sig_TEs_fam, data.gsva[, c(1:77)]) #77 selected pathways
+
+# saving and loading
+#save(cor_all_TE_repName_gsva, cor_sig_TE_repName_gsva, file= "r_objects/correlation_TES_with_GSVA.RData")
+load("G:/LINE1-BLCA/r_objects/correlation_TES_with_GSVA.RData")
+
+
+
+#__________________SUMMARY STAT ____________________________#
+tmp <- cor_all_TE_repName_gsva
+
+# create a new column 
+tmp$gene_set <- ifelse(startsWith(tmp$var2, "Immport_"), "Immport",
+                       ifelse(startsWith(tmp$var2, "John.P.Sfakianos"), "John.P.Sfakianos",
+                              ifelse(startsWith(tmp$var2, "Combes.et.al"), "Combes.et.al", "CMG")))
+
+length(unique(tmp$var2[tmp$gene_set=="Combes.et.al"]))
+
+
+# filteration
+ftmp <- tmp[abs(tmp$correlation_coefficient) >= 0.4 & tmp$FDR < 0.05, ]
+#
+fftmp <- ftmp[ftmp$gene_set=="John.P.Sfakianos",]
+cell_markers_tes <- unique(fftmp$var1)
+
+fftmp <- ftmp[ftmp$gene_set=="Immport",]
+immport_tes <- unique(fftmp$var1)
+fftmp <- ftmp[ftmp$gene_set=="Combes.et.al",]
+combes_tes <- unique(fftmp$var1)
+
+immune_associated_tes <- unique(immport_tes, combes_tes)
+
+# CMG
+fftmp <- ftmp[ftmp$gene_set=="CMG",]
+cmg_tes <- unique(fftmp$var1)
+
+#_______________________________________________________#
+
+# saveRDS
+#saveRDS(cor_TE_repName_gsva, "cor_TE_repName_gsva.RDS")
+
+# filttered results:
+filtCor_all_TE_repName_gsva <- cor_all_TE_repName_gsva[abs(cor_all_TE_repName_gsva$correlation_coefficient) >= 0.4 & cor_all_TE_repName_gsva$FDR < 0.05, ]
+
+# sig TEs
+filtCor_sig_TE_repName_gsva <- cor_sig_TE_repName_gsva[abs(cor_sig_TE_repName_gsva$correlation_coefficient) >= 0.4 & cor_sig_TE_repName_gsva$FDR < 0.05, ]
+
+cor_all_TE_repName_gsva<- unique(filtCor_all_TE_repName_gsva$var1)
+# count number of TES
+overlap_cor_sig_allTEs_surv_tes_fdr_0.05 <- unique(filtCor_all_TE_repName_gsva$var1[filtCor_all_TE_repName_gsva$var1 %in% surv_tes_fdr_0.05])
+
+# fir visualization
+  
+vis_dat <- filtCor_all_TE_repName_gsva %>%
+  group_by(var1) %>%
+  summarize(
+    TE = unique(var1),
+    Correlated_Pheno_Number = n(),
+    Phenotype = paste(var2, collapse = ", ")
+  ) %>%
+  dplyr::select(TE, Correlated_Pheno_Number, Phenotype) %>%
+  arrange(desc(Correlated_Pheno_Number))
+
+vis_dat[1:5,] %>%
+  kable(format = "html") %>%
+  kable_styling() %>%
+  kable_classic(full_width = F, html_font = "Cambria") %>%
+  add_header_above(c("TEs correlated with molecular phenotypes (n = 185)" = 3))
+```
+
+Furthermore, we included StromalScore and ImmuneScore obtained from the ESTIMATE algorithm, along with additional phenotypes from [Chen et al, Front. Immunol., 15 April 2021](https://www.frontiersin.org/articles/10.3389/fimmu.2021.672158/full) , in the correlation analysis. This was done to potentially increase the overlap between survival-associated TEs and TEs correlated with molecular phenotypes. A total of 59 TEs have been identified as being associated  with survival probability and strongly correlated with molecular phenotypes:
+
+```{r chunk9  TE signature development  FS-II: ESTIMATE TME sig cor with TEs, echo=FALSE, include=FALSE}
+
+#____________________________________ESTIMATE___COR______survTEs___________________________________
+
+## Immune scores from ESTIMATE
+#working with data from : https://www.frontiersin.org/articles/10.3389/fimmu.2021.672158/full
+
+estDat = read.csv(paste0(root_path, "estimateScoreTCGA.csv"))
+
+tmeDat = read.csv(paste0(root_path, "tmeScoreTCGA.csv"))
+estDattmeDat <- dplyr::left_join(estDat, tmeDat)
+# drop rows with NA
+#estDattmeDat <- estDattmeDat[!is.na(rownames(estDattmeDat)),]
+
+# drop ID column from estDaand ..
+rownames(estDattmeDat) <- estDattmeDat$ID
+#
+estDattmeDat <- estDattmeDat[, -c(1,2)]
+
+# filter expression matrices
+filt_all_TEs <- all_TEs[substr(rownames(all_TEs),1,15) %in% rownames(estDattmeDat),]
+
+rownames(filt_all_TEs) <- substr(rownames(filt_all_TEs),1,15)
+filt_all_TEs <- filt_all_TEs[!duplicated(rownames(filt_all_TEs)),]
+#
+all(rownames(estDattmeDat) %in% rownames(filt_all_TEs))
+#TRUE
+estDattmeDat <- estDattmeDat[rownames(filt_all_TEs),]
+#
+all(rownames(estDattmeDat) ==rownames(filt_all_TEs))
+
+
+# COR
+cor_all_TE_repName_estTE <- correlateMatrix(filt_all_TEs, estDattmeDat)
+#
+filtCor_all_TE_repName_estTE <- cor_all_TE_repName_estTE[abs(cor_all_TE_repName_estTE$correlation_coefficient) >= 0.4 & cor_all_TE_repName_estTE$FDR < 0.05, ]
+
+#________________SUmmary STAT_________________#
+estimate_tes <- unique(filtCor_all_TE_repName_estTE$var1)
+
+# 
+#table(estimate_tes %in% unique(c(cmg_tes, cell_markers_tes, immune_associated_tes)))
+
+#________________________________________________#
+
+# check to see if the significant TEs are already in the overlap_cor_sig_allTEs_surv_tes_fdr_0.05
+#table(unique(filtCor_all_TE_repName_estTE$var1) %in% overlap_cor_sig_allTEs_surv_tes_fdr_0.05)
+
+# define set of TEs significantly coorelated with ESTIMAYTE score
+cor_all_TE_repName_estTME <- unique(filtCor_all_TE_repName_estTE$var1)
+
+# Add Tes to the selected list of TEs
+overlap_cor_sig_allTEs_surv_tes_fdr_0.05 <- surv_tes_fdr_0.05[surv_tes_fdr_0.05 %in% unique(c(cor_all_TE_repName_gsva, cor_all_TE_repName_estTME))]
+#
+print(overlap_cor_sig_allTEs_surv_tes_fdr_0.05)
+
+```
+
+```{r chunk11  Summarize selecetd TEs into group, echo=FALSE}
+vis_te <- unique(te_rmk[, c(3, 4, 5)])
+
+vis_te_agg <- vis_te %>%
+  filter(repName %in% overlap_cor_sig_allTEs_surv_tes_fdr_0.05) %>%
+  group_by(repClass, repFamily) %>%
+  summarize(repNames = paste(repName, collapse = ","))
+
+
+vis_te_agg %>%
+  kable(format = "html") %>%
+  kable_styling() %>%
+  kable_classic(full_width = F, html_font = "Cambria") %>%
+  add_header_above(c("Intersection of survival-associated and molecular phenotypes-correlated TES" = 3))
+
+```
+
+#### 2.2 TE Signature development
+
+To develop the score, we employed a non-parametric, unsupervised approach for calculating enrichment scores in individual samples, as described in Gene Set Variation Analysis (GSVA) documentation. We have considered different approaches in developing the signature score: 
+
+1- **Approach 1**:  We included all the features selected in the feature selection (FS) step, naming the resulting signature "all_59_TEs" signature score.
+
+2- **Approach 2**: This is based on the OS probability association with tEs.  We categorized the initially selected TEs into those with a favorable and unfavorable effect on overall survival  and  developed "TE_signature_favorableOS" and "TE_signature_UnfavorableOS" scores. 
+
+3- **Approach 3** : This is a correlation-clustering approach. We grouped the selected TEs into three categories based on their expression profile similarity, followed by hierarchical clustering ("TE_Corsignature_1", "TE_Corsignature_2" and "TE_Corsignature_3"). See below for the clusters.
+
+```{r chunk10  TE signature development using GSVA , echo=FALSE}
+library(factoextra)
+## APPROACH 1 : USING GSVA and then validating using cor and regression
+
+# we may consider the following TEs as gene list to develop a TE signature score:
+
+#____________ 1 full set of TEs
+#overlap_cor_sig_allTEs_surv_tes_fdr_0.05 # overlap between all TEs significantly associated gsva with Surv TEs
+
+#_____________ 2 Split by cor test + clustering result
+corDat <- t(log2CPM)
+corDat <- corDat[, colnames(corDat) %in% overlap_cor_sig_allTEs_surv_tes_fdr_0.05]
+# calculate correlation
+corDat <- cor(corDat)
+# identify similar variables based on claustering
+# Compute distance matrix
+dist_matrix <- as.dist(1 - corDat)
+
+# Perform hierarchical clustering
+hc <- hclust(dist_matrix, method = "complete")
+labels <- cutree(hc, h = 1.3)
+
+# visuazliation
+fviz_dend(hc, cex = 0.8, k=3, 
+          rect = TRUE,  
+          k_colors = "jco",
+          rect_border = "jco", 
+          rect_fill = TRUE, 
+          horiz = TRUE,
+          main = "TEs clusters")
+
+# extract groups
+# Assign variable names to groups
+groups <- split(names(labels), labels)
+
+#______________ 3 Split by HR > 1 and HR <1 
+TE_signature_favorableOS = surv_summary$var_name[surv_summary$var_name %in% overlap_cor_sig_allTEs_surv_tes_fdr_0.05 & surv_summary$Hazard_Ratio > 1]
+
+TE_signature_UnfavorableOS = surv_summary$var_name[surv_summary$var_name %in% overlap_cor_sig_allTEs_surv_tes_fdr_0.05 & surv_summary$Hazard_Ratio < 1]
+
+#________________ putting all in a gene list  
+TE_geneList <- list("all_TEs" = overlap_cor_sig_allTEs_surv_tes_fdr_0.05,
+                    "TE_signature_favorableOS" = TE_signature_favorableOS,
+                    "TE_signature_UnfavorableOS" = TE_signature_UnfavorableOS,
+                    "TE_Corsignature_1" = groups[[1]],
+                    "TE_Corsignature_2" = groups[[2]],
+                    "TE_Corsignature_3" = groups[[3]])
+
+```
+ Considering the higher frequency of elements form certain families in each correlation group we re-named them according to the repFamily/Class name
+In correlation group1
+
+ DNA LINE  LTR SINE 
+   5    1    8    3
+   
+In correlation group2
+LINE 
+   6
+   
+In correlation group3
+
+ DNA LINE  LTR 
+   2    2   16 
+
+So we renamed the "TE_Corsignature_1", "TE_Corsignature_2" and "TE_Corsignature_3" as "Alu_score", "L1_score", "ERV_score".
+
+
+```{r chunk10  TE signature development using GSVA vis , echo=FALSE, include=FALSE}
+#________________ putting all in a gene list  
+TE_geneList <- list("all_TEs" = overlap_cor_sig_allTEs_surv_tes_fdr_0.05,
+                    "TE_signature_favorableOS" = TE_signature_favorableOS,
+                    "TE_signature_UnfavorableOS" = TE_signature_UnfavorableOS,
+                    "Alu_score" = groups[[1]],
+                    "ERV_score" = groups[[2]],
+                    "L1_score" = groups[[3]])
+
+
+# use the TE_geneList to define TE signatures
+TE_signatureScore_gsva <- as.data.frame(t(gsva(log2CPM, TE_geneList, 
+                          min.sz=1,
+                          max.sz=500,
+                          method= "gsva",
+                            kcdf="Gaussian")))
+
+
+# to have more chance of getting significant resulkts we, adding simple adds up of expression as an score
+L1_score_sum <- as.data.frame(rowSums(t(log2CPM[rownames(log2CPM) %in% groups[[3]],])))
+                              
+Alu_score_sum <- as.data.frame(rowSums(t(log2CPM[rownames(log2CPM) %in% groups[[1]],])))
+ERV_score_sum <- as.data.frame(rowSums(t(log2CPM[rownames(log2CPM) %in% groups[[2]],])))
+# Adding to the df
+TE_signatureScore_gsva$L1_score_sum <- L1_score_sum[,1]
+TE_signatureScore_gsva$Alu_score_sum <- Alu_score_sum[,1]
+TE_signatureScore_gsva$ERV_score_sum<- ERV_score_sum[,1]
+
+
+```
+
+4- **Approach 4** : We applied LASSO regression to the selected TEs to further limit the number of TEs to be included in signature development ("LASSOsigScore")
+
+
+```{r chunk11  TE signature development using LASSO , echo=FALSE, include=FALSE}
+## APPROACH 2 : USING LASSO regression model to develop the signature
+library(glmnet)
+# details available at : https://glmnet.stanford.edu/articles/Coxnet.html
+
+
+# survdata
+survData <- data.frame(
+    barcode = clinical_data$barcode,
+    status = ifelse(clinical_data$paper_Vital.status == "Alive", 0,
+                     ifelse(clinical_data$paper_Vital.status == "Dead", 1, NA)),
+    time = as.numeric(clinical_data$paper_Combined.days.to.last.followup.or.death))
+
+# remove NAs
+survData <- survData[!is.na(survData$time) & survData$time > 0, ]
+
+
+tmp <- t(log2CPM[rownames(log2CPM) %in% overlap_cor_sig_allTEs_surv_tes_fdr_0.05,])
+# set order
+tmp <- as.matrix(tmp[survData$barcode,])
+# confirm order
+all(rownames(tmp)==survData$barcode)
+
+#
+#  Fit cox - baseline
+# create y:
+y <- Surv(survData$time, survData$status)
+
+fit <- glmnet(tmp, y, family = "cox", alpha = 1) # alpha as 1, LASSO, 0.5 ElasticNet, 0 ridge
+# vis
+plot(fit)
+
+
+#Cross-validation
+set.seed(1)
+cvfit <- cv.glmnet(tmp, y, family = "cox", type.measure = "C")
+# vis
+plot(cvfit)
+#As with other families, the left vertical line in our plot shows us where the CV-error curve hits its minimum. The right vertical line shows us the most regularized model with CV-error within 1 standard deviation of the minimum. We also extract such optimal λ s:
+lambda <- cvfit$lambda.min
+# the most regularized model with CV-error within 1 SD of the minimum  λ
+cvfit$lambda.1se
+#  extract the coefficients at certain values of λ
+# to store the coef
+coef_mtx <-coef(fit, s = lambda)
+# Extract coefficients and non-zero variables
+coef_df <- data.frame(TE = coef_mtx@Dimnames[[1]][coef_mtx@i +1],
+                     coefs = coef_mtx@x)
+
+
+# 
+# 
+# 
+# # Running the LASSO on all expression matrix 
+# tmp <- t(log2CPM)
+# # set order
+# tmp <- as.matrix(tmp[survData$barcode,])
+# # confirm order
+# all(rownames(tmp)==survData$barcode)
+# 
+# fit <- glmnet(tmp, y, family = "cox", alpha = 1) # alpha as 1, LASSO, 0.5 ElasticNet, 0 ridge
+# cvfit <- cv.glmnet(tmp, y, family = "cox", type.measure = "C")
+# lambda <- cvfit$lambda.min
+# # to store the coef
+# coef_mtx <-coef(fit, s = lambda)
+# 
+# 
+# 
+# 
+# # Extract coefficients and non-zero variables
+# coef_df <- data.frame(non_zero_vars = coef_mtx@Dimnames[[1]][coef_mtx@i],
+#                       non_zero_coefs = coef_mtx@x)
+# 
+# 
+# 
+# 
+# 
+# # To run all regularization and comparing the results:
+# # Assuming x and y are your input data
+# fit_lasso <- glmnet(tmp, y, family = "cox", alpha = 1)  # LassO
+# fit_ridge <- glmnet(tmp, y, family = "cox", alpha = 0)  # Ridge
+# fit_elastic <- glmnet(tmp, y, family = "cox", alpha = 0.5)  # Elastic Net
+# 
+# # Extract coefficients at a specific value of lambda (e.g., minimum lambda)
+# coef_lasso <- coef(fit_lasso, s = lambda)
+# coef_lasso_df <- data.frame(vars = coef_lasso@Dimnames[[1]][coef_lasso@i], LASSO_coefs = coef_lasso@x)
+# coef_ridge <- coef(fit_ridge, s = lambda)
+# coef_ridge_df <- data.frame(vars = coef_ridge@Dimnames[[1]], Ridge_coefs = coef_ridge@x)
+# coef_elastic <- coef(fit_elastic, s = lambda)
+# coef_elastic_df <- data.frame(vars = coef_elastic@Dimnames[[1]][coef_elastic@i], Elastic_coefs = coef_elastic@x)
+# 
+# # putting all result in one df
+# allReg_coef <- full_join(coef_lasso_df, coef_ridge_df)
+# allReg_coef <- full_join(allReg_coef, coef_elastic_df)
+#__________________________________________________SCORE calculation_______________________________#
+
+tmp <- log2CPM %>%
+  as.data.frame() %>%
+  t() %>%
+  subset(select = coef_df$TE)
+
+# multiply expression scores by coefs
+for(i in 1:ncol(tmp)){
+  tmp[,i] <- tmp[,i]*coef_df$coefs[coef_df$TE==colnames(tmp)[i]]
+}
+
+TE_signatureScore_lasso = data.frame(LASSOsigScore = rowSums(tmp))
+
+```
+
+```{r chunk11  TE signature development using LASSO vis, echo=FALSE}
+coef_df %>%
+  kable(format = "html") %>%
+  kable_styling() %>%
+  kable_classic(full_width = F, html_font = "Cambria") %>%
+  add_header_above(c("TEs and their LASSO coefficients to predict OS" = 2))
+
+```
+
+The developed signatures show different level of correlation with each other:
+
+```{r chunk13  TE signature validation correlation with each other, echo=FALSE}
+# create one df for all sigscores
+sigScore <- merge(TE_signatureScore_gsva, TE_signatureScore_lasso, by = "row.names", all = TRUE)
+# Reset row names
+rownames(sigScore) <- sigScore$Row.names
+sigScore <- sigScore[, -1]
+# Calculate the correlation matrix
+#cor_matrix <- cor(sigScore)
+# Visualize the correlation matrix using corrplot
+#corrplot(cor_matrix, method = "color", type = "upper", tl.col = "black", tl.srt = 45)
+
+chart.Correlation(R = as.matrix(sigScore), histogram=TRUE)
+
+```
+
+In the following step, we attempted to merge signatures generated through survival-association (n=2) and correlation-clustering approaches (n=3), defining a singular signature score per each method. Once again, the signature calculation involved the methods described in GSVA. To clarify, we amalgamated expression levels on two stages: firstly, using TE expression levels at the repName level to construct survival-based and correlation-clustering-based signature scores. In the subsequent round, we treated the developed signature scores  as input and combined the survival-based signatures ("TE_signature_favorableOS" and "TE_signature_UnfavorableOS") and correlation-clustering signatures ("TE_Corsignature_1", "TE_Corsignature_2" and "TE_Corsignature_3") into one unified signature score. 
+
+```{r chunk13  TE signature validation unification of scores , echo=FALSE}
+library(DataExplorer)
+library(caret)
+
+# check distribution of sigScores
+plot_qq(sigScore)
+
+
+# create psudo gene list based on the signature score
+psudoSurv <- c("TE_signature_favorableOS", "TE_signature_UnfavorableOS")
+psudoCor <- c("L1_score", "Alu_score","ERV_score")
+psudoGL <- list(psudoSurv= psudoSurv,
+                psudoCor = psudoCor)
+
+psudoExpDat <- as.matrix(t(sigScore[,c(2:6)]))
+
+# use the TE_geneList to  TE signatures
+# psudo_signatureScore_gsva <-t(gsva(psudoExpDat, psudoGL, 
+#                           min.sz=1,
+#                           max.sz=500,
+#                           method= "gsva",
+#                             kcdf="Gaussian"))
+
+# RUN GSVA using all possible combinations
+
+# Define parameter values
+methods <- c("gsva", "ssgsea", "plage", "zscore")
+kcdf_values <- c("Gaussian", "Poisson")
+mx_diff_values <- c(TRUE, FALSE)
+abs_ranking_values <- c(TRUE, FALSE)
+
+# Create a list to store results
+results_list <- list()
+
+# Loop through all combinations of parameters
+for (method in methods) {
+  for (kcdf in kcdf_values) {
+    for (mx_diff in mx_diff_values) {
+      for (abs_ranking in if (mx_diff) abs_ranking_values else FALSE) {
+        
+        # Perform GSVA for the current combination of parameters
+        result <- t(gsva(
+          expr = psudoExpDat,
+          gset.idx.list = psudoGL,
+          method = method,
+          kcdf = if (method == "gsva") kcdf else NULL,
+          abs.ranking = abs_ranking,
+          mx.diff = mx_diff
+        ))
+        
+        # Create a unique identifier for the current combination
+        identifier <- paste(method, kcdf, mx_diff, abs_ranking, sep="_")
+        
+        # Save the result in the list using the identifier
+        results_list[[identifier]] <- result
+      }
+    }
+  }
+}
+
+# extracting the res
+# Loop through the results_list and modify column names
+for (i in seq_along(results_list)) {
+  i_name <- names(results_list)[i]
+  
+  # Extract the data frame from the current result_list element
+  current_df <- results_list[[i_name]]
+  
+  # Modify column names based on the combination of element name and column name
+  new_colnames <- paste0(colnames(current_df), "_", i_name)
+  colnames(current_df) <- new_colnames
+  
+  # Assign the modified data frame back to the list
+  results_list[[i_name]] <- current_df
+}
+
+#
+psudoSigs <- do.call(cbind, results_list)
+
+# drop columns with very small SD
+# Calculate standard deviation for each column
+sd_values <- apply(psudoSigs, 2, sd)
+# Identify columns to drop
+idx <- sd_values != 0
+# Drop columns from the dataframe
+psudoSigs <- psudoSigs[,idx]
+
+# calculate correlation bteween elements an keep one 
+
+# calculate correlation matrix
+correlationMatrix <- cor(psudoSigs)
+
+# find attributes that are highly corrected (ideally >0.75)
+highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.75)
+
+# selected scores
+psudoSigs_selected <- psudoSigs[, -highlyCorrelated]
+
+# update sigScore object
+all(rownames(sigScore) == rownames(psudoSigs_selected))
+# TRUE
+sigScore_mod <- as.data.frame(cbind(sigScore, psudoSigs_selected))
+# drop no longer needed columns
+#sigScore_mod <- sigScore_mod[, -c(2:6)]
+
+```
+
+
+#### 2.3 Signature validation:
+
+The validation process involved examining the correlation between the TE signatures and relevant molecular phenotypes followed by clustering samples according to their signature scores into distinct groups with significantly different OS rate. This analysis was performed using K-adaptive partitioing for survival data approach as described in [Eo et al.](https://arxiv.org/abs/1306.4615). 
+
+##### 2.3.1 COrrelation analysis between signature scores and molecular phenotypes
+
+In addition to pathway enrichment scores (e.g. ssGSEA and xCell) and phenotype that are defined based on bulk RNA-seq deconvolution algorithm (e.g. CIBERSORT), we included master transcription factors (TFs) regulon activity the validation step. This allowed us to assess the correlation between TE signature scores and TF regulon activity in each cell.
+To limit the TFs to those that are implicated in bladder cancer, we curated the following list by litrature review.
+
+**Bladder cancer TFs**
+
+- A dataset comprising 120 TFs focuses on the transcriptional regulatory network associated with cell cycle dysregulation in noninvasive papillary urothelial carcinoma . It encompasses the activity of 120 TFs identified through the ARACNe algorithm. The TFs include pluripotency factors (e.g., SOX2, SALL4), sex hormone binding receptors (e.g., ESR1, PGR), and various homeobox factors [Joshua I Warrick et al, Sci Rep,2022 ](https://pubmed.ncbi.nlm.nih.gov/36192513/)
+
+
+- Lineage plasticity in bladder cancers with squamous differentiation is associated with the loss of expression of critical transcription factors FOXA1, GATA3, and PPARG, essential for maintaining urothelial cell identity. FOXA1 alos is a bladder cancer cell-intrinsic repressor of the IFNγ transcriptional signature and CD274/PD-L1 expression [Joshua I Warrick et al, Nat Commun, 2022 ](https://pubmed.ncbi.nlm.nih.gov/36323682/)
+
+
+- FOSL (aka FRA1) and FLI1 were identified as two critical transcription factors that differentially regulate the regulatory landscape in MIBC. They regulate epithelial cell migration and cell junction organization [Guneri-Sozeri et al, Commun Biol, 2023](https://pubmed.ncbi.nlm.nih.gov/36805539/)
+
+- The combination of the five  TFs, CBX7, AKNA, HDAC4, EBF2, and NFATC1  emerged as an independent prognostic biomarker for BLCA [lia et al, J Cancer, 2021](https://pubmed.ncbi.nlm.nih.gov/34405021/)
+
+
+- Lineage-specific transcription factors (ASCL1, NEUROD1, POU2F3) in Small Cell/Neuroendocrine Bladder Cancer (SCBC) were identified to define three subtypes, mirroring those found in Small Cell Lung Cancer (SCLC) [Choi et al, ASCO 2023 ](https://ascopubs.org/doi/abs/10.1200/JCO.2023.41.6_suppl.568).
+
+- Luminal-Associated TFs are FOXA1, GATA3, PPARG, and NPAS2. FOXA1 functions as a pioneer factor that controls cell identity in bladder cancer, maintaining luminal cell identity, and inhibiting the expression of Triple Negative/Basal genes. GATA3 is a transcription factor involved in urothelial differentiation and plays a crucial role in maintaining luminal identity. PPARG, a regulator of adipocyte differentiation and immune response, is associated with luminal super-enhancers, contributing to luminal cell identity. NPAS2, involved in circadian rhythm regulation, has been identified as a new luminal-associated TF, contributing to luminal identity [Neyret-Kahn et al, Oncogene,2023](https://pubmed.ncbi.nlm.nih.gov/36944729/).
+
+Basal-Associated TFs include ZBED2, KLF7, HMGA2, and NR3C1. ZBED2, a transcriptional repressor, promotes basal cell identity, negatively correlates with FOXA1, and is involved in inflammation dampening, potentially regulating Luminal to Basal plasticity. KLF7, a transcription factor involved in cell differentiation and development, is identified as a basal-associated TF, potentially regulating the basal phenotype. HMGA2, an architectural transcription factor involved in chromatin structure, contributes to the basal cell identity. NR3C1, a receptor for various steroid hormones, is a basal-associated TF involved in regulating basal identity, as identified through scRNA-seq [Neyret-Kahn et al, Oncogene,2023](https://pubmed.ncbi.nlm.nih.gov/36944729/).
+
+
+```{r chunk13  TE signature validation correlation with gsva, estimate, cibersort,regulon and xcell, echo=FALSE}
+
+# reset rownames order
+sigScore_mod <- sigScore_mod[rownames(data.gsva),]
+
+# correlation with gene sets
+# 1___________ What ever present in master_genlist 3k
+cor_TE_sigScore_gsva <- correlateMatrix(sigScore_mod, data.gsva[, c(1:77)]) #77 selected pathways
+
+# significant cor:
+filt_cor_TE_sigScore_gsva <- cor_TE_sigScore_gsva[abs(cor_TE_sigScore_gsva$correlation_coefficient) >= 0.4 & 
+                                                    cor_TE_sigScore_gsva$FDR <= 0.05,]
+# create list 
+cor_TE_gsva_list <- split(filt_cor_TE_sigScore_gsva, filt_cor_TE_sigScore_gsva$var1)
+
+# 2________CIBERSORT deconv. immune cell types: https://bmccancer.biomedcentral.com/articles/10.1186/s12885-022-09794-9 Table S4
+cibersortDAt <- readRDS(paste0(root_path, "r_objects/cibersortDAt.RDS"))
+#
+all(rownames(sigScore_mod) %in% rownames(cibersortDAt))
+#
+cibersortDAt <- cibersortDAt[rownames(sigScore_mod),]
+#
+all(rownames(sigScore_mod)==rownames(cibersortDAt))
+# perform correlation analysis 
+cor_TE_sigScore_cibersort <- correlateMatrix(sigScore_mod, cibersortDAt)
+
+filt_cor_TE_sigScore_cibersort <- cor_TE_sigScore_cibersort[abs(cor_TE_sigScore_cibersort$correlation_coefficient) >= 0.4 & 
+                                                    cor_TE_sigScore_cibersort$FDR <= 0.1,]
+
+# create list 
+cor_TE_cibersort_list <- split(filt_cor_TE_sigScore_cibersort, filt_cor_TE_sigScore_cibersort$var1)
+
+
+# 3- ESTIMATE + TME
+tmp <- sigScore_mod
+rn <- substr(rownames(tmp),1,15)
+tmp <- tmp[ !duplicated(rn),]
+rownames(tmp) <- rn[!duplicated(rn)]
+# filter based on the target df
+tmp <- tmp[rownames(tmp) %in% rownames(estDattmeDat),]
+# re-setting row order
+estDattmeDat <- estDattmeDat[rownames(tmp),]
+#
+#
+all(rownames(tmp)==rownames(estDattmeDat))
+# perform correlation analysis 
+cor_TE_sigScore_estTme <- correlateMatrix(tmp, estDattmeDat)
+filt_cor_TE_sigScore_estTme <- cor_TE_sigScore_estTme[abs(cor_TE_sigScore_estTme$correlation_coefficient) >= 0.4 & 
+                                                   cor_TE_sigScore_estTme$FDR <= 0.05,]
+# create list 
+cor_TE_estTme_list <- split(filt_cor_TE_sigScore_estTme, filt_cor_TE_sigScore_estTme$var1)
+
+
+# 3____________ x-cell
+##
+xcell = data.frame(data.table::fread(paste0(root_path, "xCell_TCGA_RSEM.txt")), row.names = T)
+# repair sample name in header
+colnames(xcell) = gsub('[.]', "-", colnames(xcell))
+xcell = t(xcell)
+# tmp TE sig score
+#
+xcell <- xcell[rownames(xcell) %in% rownames(tmp),]
+tmp <- tmp[rownames(tmp) %in% rownames(xcell),]
+#
+tmp <- tmp[rownames(xcell),]
+#
+all(rownames(tmp)==rownames(xcell))
+
+# correlation
+cor_TE_sigScore_xcell <- correlateMatrix(tmp, xcell)
+filt_cor_TE_sigScore_xcell <- cor_TE_sigScore_xcell[abs(cor_TE_sigScore_xcell$correlation_coefficient) >= 0.4 & 
+                                                        cor_TE_sigScore_xcell$FDR <= 0.05,]
+
+# create list 
+cor_TE_xcell_list <- split(filt_cor_TE_sigScore_xcell, filt_cor_TE_sigScore_xcell$var1)
+
+
+# 4 _______ regulon score 
+# Ananlysis was performed using RTN.R script
+
+# to load the object regulon_activity
+load("~/Transposons_Exp_BLCA_GitHub/RTN_files/regulon_activity.RData")
+#
+tmp <- sigScore_mod
+
+# filter based on the target df
+tmp <- tmp[rownames(tmp) %in% rownames(regulon_activity),]
+# re-setting row order
+regulon_activity <- regulon_activity[rownames(tmp),]
+#
+#
+all(rownames(tmp)==rownames(regulon_activity))
+# perform correlation analysis 
+cor_TE_sigScore_regulon <- correlateMatrix(tmp, regulon_activity)
+filt_cor_TE_sigScore_regulon <- cor_TE_sigScore_regulon[abs(cor_TE_sigScore_regulon$correlation_coefficient) >= 0.4 & 
+                                                   cor_TE_sigScore_regulon$FDR <= 0.05,]
+# create list 
+cor_TE_regulon_list <- split(filt_cor_TE_sigScore_regulon, filt_cor_TE_sigScore_regulon$var1)
+
+```
+
+```{r chunk13  TE signature validation selecting one sig to go, echo=FALSE, include=FALSE}
+# creating a list of lists based on the correlation score. The element of this list should be used for further analysis
+cor_TE_lists <- list(TE_gsva = cor_TE_gsva_list,
+                     TE_cibersort = cor_TE_cibersort_list,
+                     TE_estTme = cor_TE_estTme_list,
+                     TE_regulon = cor_TE_regulon_list,
+                     TE_xcell = cor_TE_xcell_list)
+
+```
+
+```{r chunk13  TE signature validation cox model selected TE numerical values, echo=FALSE, include=FALSE}
+tmp <- t(log2CPM[rownames(log2CPM) %in% overlap_cor_sig_allTEs_surv_tes_fdr_0.05,])
+
+tmp <- tmp[rownames(tmp) %in% survData$barcode,]
+#all(rownames(tmp)== survData$barcode)
+#[1] TRUE
+
+tmp <- as.data.frame(cbind(survData, tmp))
+
+# fitting the model:
+selected_cols <- colnames(tmp)[4:45]  # Add other column names as needed
+
+variable = c()
+HR = numeric()
+pVal = numeric()
+
+for (col in selected_cols) {
+  # Subset your data frame to include relevant columns
+  subset_data <- tmp[, c("time", "status", col)]
+  # Fit the Cox univariate model
+  cox_model <- coxph(Surv(time, status) ~ ., data = subset_data)
+  
+  # Extract HR and p-value
+  hr <- exp(coef(cox_model)[col])
+  p_value <- summary(cox_model)$wald[3]
+  
+  # Store results 
+  variable = c(variable, col)
+  HR = c(HR, hr)
+  pVal = c(pVal, p_value)
+}
+  cox_df <- data.frame(variable = variable, HR = HR, p_value = pVal, stringsAsFactors = FALSE)
+
+```
+
+```{r chunk13  TE signature validation LASSO selecting TEs in each TE scores, echo=FALSE, include=FALSE}
+
+#______________________ using LASSO to select TEs
+
+tmp <- t(log2CPM[rownames(log2CPM) %in% overlap_cor_sig_allTEs_surv_tes_fdr_0.05,])
+
+
+tmp <- tmp[rownames(tmp) %in% survData$barcode,]
+
+all(rownames(tmp)== survData$barcode)
+#[1] TRUE
+
+alu_tmp <- tmp[, colnames(tmp) %in% groups[[1]]]
+l1_tmp <-  tmp[, colnames(tmp) %in% groups[[3]]]
+erv_tmp <-  tmp[, colnames(tmp) %in% groups[[2]]]
+#
+#  Fit cox - baseline
+# create y:
+y <- Surv(survData$time, survData$status)
+
+fit_alu <- glmnet(alu_tmp, y, family = "cox", alpha = 1) # alpha as 1, LASSO, 0.5 ElasticNet, 0 ridge
+fit_l1 <- glmnet(l1_tmp, y, family = "cox", alpha = 1) # alpha as 1, LASSO, 0.5 ElasticNet, 0 ridge
+fit_erv <- glmnet(erv_tmp, y, family = "cox", alpha = 1) # alpha as 1, LASSO, 0.5 ElasticNet, 0 ridge
+
+# vis
+plot(fit_alu)
+plot(fit_l1)
+plot(fit_erv)
+
+
+#Cross-validation
+set.seed(1)
+cvfit_alu <- cv.glmnet(alu_tmp, y, family = "cox", type.measure = "C")
+cvfit_l1 <- cv.glmnet(l1_tmp, y, family = "cox", type.measure = "C")
+cvfit_erv <- cv.glmnet(erv_tmp, y, family = "cox", type.measure = "C")
+
+# vis
+plot(cvfit_alu)
+plot(cvfit_l1)
+plot(cvfit_erv)
+
+#As with other families, the left vertical line in our plot shows us where the CV-error curve hits its minimum. The right vertical line shows us the most regularized model with CV-error within 1 standard deviation of the minimum. We also extract such optimal λ s:
+lambda_alu <- cvfit_alu$lambda.min
+lambda_l1 <- cvfit_l1$lambda.min
+lambda_erv <- cvfit_erv$lambda.min
+
+#  extract the coefficients at certain values of λ
+# to store the coef
+coef_mtx_alu <-coef(fit_alu, s = lambda_alu)
+coef_mtx_l1 <-coef(fit_l1, s = lambda_l1)
+coef_mtx_erv <-coef(fit_erv, s = lambda_erv)
+
+
+# Extract coefficients and non-zero variables
+coef_df_alu <- data.frame(TE = coef_mtx_alu@Dimnames[[1]][coef_mtx_alu@i +1],
+                     coefs = coef_mtx_alu@x)
+coef_df_l1 <- data.frame(TE = coef_mtx_l1@Dimnames[[1]][coef_mtx_l1@i +1],
+                     coefs = coef_mtx_l1@x)# Extract coefficients and non-zero variables
+coef_df_erv <- data.frame(TE = coef_mtx_erv@Dimnames[[1]][coef_mtx_erv@i +1],
+                     coefs = coef_mtx_erv@x)
+
+#__________________________________________________SCORE calculation_______________________________#
+# Alu
+tmp_alu <- log2CPM %>%
+  as.data.frame() %>%
+  t() %>%
+  subset(select = coef_df_alu$TE)
+
+# multiply expression scores by coefs
+for(i in 1:ncol(tmp_alu)){
+  tmp_alu[,i] <- tmp_alu[,i]*coef_df_alu$coefs[coef_df_alu$TE==colnames(tmp_alu)[i]]
+}
+Alu_signatureScore_lasso = data.frame(LASSOsigScore = rowSums(tmp_alu))
+# L1
+tmp_l1 <- log2CPM %>%
+  as.data.frame() %>%
+  t() %>%
+  subset(select = coef_df_l1$TE)
+# check distribution
+CancerSubtypes::data.checkDistribution(tmp_l1)
+
+# multiply expression scores by coefs
+for(i in 1:ncol(tmp_l1)){
+  tmp_l1[,i] <- tmp_l1[,i]*coef_df_l1$coefs[coef_df_l1$TE==colnames(tmp_l1)[i]]
+}
+# check distribution
+CancerSubtypes::data.checkDistribution(tmp_l1)
+
+L1_signatureScore_lasso = data.frame(LASSOsigScore = rowSums(tmp_l1))
+
+# ERV
+tmp_erv <- log2CPM %>%
+  as.data.frame() %>%
+  t() %>%
+  subset(select = coef_df_erv$TE)
+# check distribution
+CancerSubtypes::data.checkDistribution(tmp_erv)
+
+# multiply expression scores by coefs
+for(i in 1:ncol(tmp_erv)){
+  tmp_erv[,i] <- tmp_erv[,i]*coef_df_erv$coefs[coef_df_erv$TE==colnames(tmp_erv)[i]]
+}
+# check distribution
+CancerSubtypes::data.checkDistribution(tmp_erv)
+
+ERV_signatureScore_lasso = data.frame(LASSOsigScore = rowSums(tmp_erv))
+
+# one lassoSig df
+lasso_sigs <- data.frame(Alu_sig_lasso = Alu_signatureScore_lasso$LASSOsigScore,
+                         L1_sig_lasso = L1_signatureScore_lasso$LASSOsigScore,
+                         ERV_sig_lasso = ERV_signatureScore_lasso$LASSOsigScore,
+                         row.names = rownames(tmp_alu))
+
+# Survival analysis
+tmp <- lasso_sigs[rownames(lasso_sigs) %in% survData$barcode,]
+all(rownames(tmp)== survData$barcode)
+tmp <- as.data.frame(cbind(survData, tmp))
+# Aggregating the score 
+# simple adding up the scores
+tmp$TE_sig <- tmp$Alu_sig_lasso+tmp$L1_sig_lasso+tmp$ERV_sig_lasso
+
+
+# calculate lasso coefficient and then multiplying values by coefficnt then adding up 
+y <- Surv(tmp$time, tmp$status)
+fit<- glmnet(tmp[, c("Alu_sig_lasso","L1_sig_lasso","ERV_sig_lasso")], y, family = "cox", alpha = 1)
+set.seed(1)
+cvfit <- cv.glmnet(as.matrix(tmp[, c("Alu_sig_lasso","L1_sig_lasso","ERV_sig_lasso")]), 
+                   y,
+                   family = "cox",
+                   type.measure = "C")
+# lambda
+lambda <- cvfit$lambda.min
+coef_mtx <-coef(fit, s = lambda)
+coef_df <- data.frame(TE = coef_mtx@Dimnames[[1]][coef_mtx@i +1],
+                     coefs = coef_mtx@x)
+# #___________________save coefficient inot a list for validation purposes__________#
+# coefs <- list(Alue = coef_df_alu,
+#               L1 = coef_df_l1,
+#               ERV = coef_df_erv,
+#               TE_sig = coef_df)
+# # 
+# saveRDS(coefs, "G:/LINE1-BLCA/coefs.RDS")
+
+
+# calculate the score
+t <- tmp[, c("Alu_sig_lasso","L1_sig_lasso","ERV_sig_lasso")]
+
+# multiply expression scores by coefs
+for(i in 1:ncol(t)){
+  t[,i] <- t[,i]*coef_df$coefs[coef_df$TE==colnames(t)[i]]
+}
+aggTE_signatureScore_lasso = rowSums(t)
+
+# ading to tmp
+tmp$aggTE_sig <- aggTE_signatureScore_lasso
+
+# save tmp inot a variable
+sigScore_mod_lasso = tmp
+#________________________Survival analysis _______________________________#
+
+# fitting the model:
+selected_cols <- colnames(tmp)[4:8]  # Add other column names as needed
+
+variable = c()
+HR = numeric()
+pVal = numeric()
+
+for (col in selected_cols) {
+  # Subset your data frame to include relevant columns
+  subset_data <- tmp[, c("time", "status", col)]
+  # Fit the Cox univariate model
+  cox_model <- coxph(Surv(time, status) ~ ., data = subset_data)
+  
+  # Extract HR and p-value
+  hr <- exp(coef(cox_model)[col])
+  p_value <- summary(cox_model)$wald[3]
+  
+  # Store results 
+  variable = c(variable, col)
+  HR = c(HR, hr)
+  pVal = c(pVal, p_value)
+}
+cox_df <- data.frame(variable = variable, HR = HR, p_value = pVal, stringsAsFactors = FALSE)
+
+# KM curves
+# max stat to cut scores into category
+res.cut <- surv_cutpoint(tmp, time = "time", event = "status",
+                           variables = c("Alu_sig_lasso","L1_sig_lasso","ERV_sig_lasso", "TE_sig","aggTE_sig"))
+unaltered_tmp <- tmp
+# categorize variables
+for(te in c("Alu_sig_lasso","L1_sig_lasso","ERV_sig_lasso","TE_sig","aggTE_sig")){
+  ct <- res.cut[[te]][["estimate"]]
+  tmp[, te] <- ifelse(tmp[, te] < ct, "low",
+                         ifelse(tmp[, te] > ct, "high", NA))
+}
+
+# dropping NAs
+tmp <- tmp[!is.na(tmp$Alu_sig_lasso),]
+tmp <- tmp[!is.na(tmp$L1_sig_lasso),]
+tmp <- tmp[!is.na(tmp$ERV_sig_lasso),]
+
+#
+# convert time to year and drop longer than 5 years 
+tmp$time <- tmp$time/365.25
+
+# set those greater than 5 to 0
+tmp$status[tmp$time > 5] <- 0
+tmp$time[tmp$time > 5] <- 5
+
+
+
+# fitting surv model
+fit <- survfit(Surv(time, status) ~ ERV_sig_lasso, data = tmp)
+
+#fit <- survfit(Surv(time, status) ~ L1_score+Alu_score+ERV_score, data = km_dat)
+# fitting curve
+# Change color, linetype by strata, risk.table color by strata
+ggsurvplot(fit,
+          pval = TRUE,
+          conf.int = FALSE,
+          risk.table = TRUE, # Add risk table
+          risk.table.col = "strata", # Change risk table color by groups
+          linetype = "strata", # Change line type by groups
+          ggtheme = theme_bw(),
+          palette =  "jco")
+
+
+
+```
+
+```{r chunk13  TE signature validation KM curves, echo=FALSE, include=FALSE}
+km_dat <- sigScore_mod
+km_dat <- km_dat[rownames(km_dat) %in% survData$barcode,]
+km_dat <- km_dat[survData$barcode,]
+
+all(rownames(km_dat) ==survData$barcode)
+#
+km_dat <- as.data.frame(cbind(survData, km_dat))
+km_dat <- km_dat[, c("time", "status", "Alu_score", "L1_score", "ERV_score")]
+
+# max stat to cut scores into category
+res.cut <- surv_cutpoint(km_dat, time = "time", event = "status",
+                           variables = c("Alu_score", "L1_score", "ERV_score"))
+# 
+# for(te in c("Alu_score", "L1_score", "ERV_score")){
+#   ct <- res.cut[[te]][["estimate"]]
+#   km_dat[, te] <- ifelse(km_dat[, te] < ct, paste0(stringr::str_split(te, "_")[[1]][1], ".low"),
+#                          ifelse(km_dat[, te] > ct, paste0(stringr::str_split(te, "_")[[1]][1], ".high"), NA))
+# }
+
+for(te in c("Alu_score", "L1_score", "ERV_score")){
+  ct <- res.cut[[te]][["estimate"]]
+  km_dat[, te] <- ifelse(km_dat[, te] < ct, "low",
+                         ifelse(km_dat[, te] > ct, "high", NA))
+}
+
+
+# drop categories with too few cases : high, high, high and high, high, low
+# hhh <- km_dat$L1_score=="L1.high" & km_dat$Alu_score=="Alu.high" & km_dat$ERV_score== "ERV.high"
+# hhl <- km_dat$L1_score=="L1.high" & km_dat$Alu_score=="Alu.high" & km_dat$ERV_score== "ERV.low"
+
+hhh <- km_dat$L1_score=="high" & km_dat$Alu_score=="high" & km_dat$ERV_score== "high"
+hhl <- km_dat$L1_score=="high" & km_dat$Alu_score=="high" & km_dat$ERV_score== "low"
+
+# dropping
+km_dat <- subset(km_dat, !(hhh | hhl))
+
+
+# convert time to year and drop longer than 5 years 
+km_dat$time <- km_dat$time/365.25
+
+# set those greater than 5 to 0
+km_dat$status[km_dat$time > 5] <- 0
+km_dat$time[km_dat$time > 5] <- 5
+
+
+# fitting surv model
+fit <- survfit(Surv(time, status) ~ ERV_score+L1_score+Alu_score, data = km_dat)
+
+#fit <- survfit(Surv(time, status) ~ L1_score+Alu_score+ERV_score, data = km_dat)
+# fitting curve
+# Change color, linetype by strata, risk.table color by strata
+alu_km_plot <- ggsurvplot(survfit(Surv(time, status) ~ Alu_score, data = km_dat),
+          pval = TRUE,
+          conf.int = FALSE,
+          risk.table = TRUE, # Add risk table
+          risk.table.col = "strata", # Change risk table color by groups
+          linetype = "strata", # Change line type by groups
+          ggtheme = theme_bw(),
+          title = "Alu score KM plot",
+          palette =  "jco")
+
+L1_km_plot <- ggsurvplot(survfit(Surv(time, status) ~ L1_score, data = km_dat),
+          pval = TRUE,
+          conf.int = FALSE,
+          risk.table = TRUE, # Add risk table
+          risk.table.col = "strata", # Change risk table color by groups
+          linetype = "strata", # Change line type by groups
+          ggtheme = theme_bw(),
+          title = "L1 score KM plot",
+          palette =  "jco")
+
+erv_km_plot <- ggsurvplot(survfit(Surv(time, status) ~ ERV_score, data = km_dat),
+          pval = TRUE,
+          conf.int = FALSE,
+          risk.table = TRUE, # Add risk table
+          risk.table.col = "strata", # Change risk table color by groups
+          linetype = "strata", # Change line type by groups
+          ggtheme = theme_bw(),
+          title = "ERV score KM plot",
+          palette =  "jco")
+
+aluL1_km_plot <- ggsurvplot(survfit(Surv(time, status) ~ L1_score+Alu_score, data = km_dat),
+          pval = TRUE,
+          conf.int = FALSE,
+          risk.table = TRUE, # Add risk table
+          risk.table.col = "strata", # Change risk table color by groups
+          linetype = "strata", # Change line type by groups
+          ggtheme = theme_bw(),
+          title = "Alu and L1 score KM plot",
+          palette =  "jco")
+
+aluERV_km_plot <- ggsurvplot(survfit(Surv(time, status) ~ ERV_score+Alu_score, data = km_dat),
+          pval = TRUE,
+          conf.int = FALSE,
+          risk.table = TRUE, # Add risk table
+          risk.table.col = "strata", # Change risk table color by groups
+          linetype = "strata", # Change line type by groups
+          ggtheme = theme_bw(),
+          title = "Alu and ERV score KM plot",
+          palette =  "jco")
+
+L1ERV_km_plot <- ggsurvplot(survfit(Surv(time, status) ~ ERV_score+L1_score, data = km_dat),
+          pval = TRUE,
+          conf.int = FALSE,
+          risk.table = TRUE, # Add risk table
+          risk.table.col = "strata", # Change risk table color by groups
+          linetype = "strata", # Change line type by groups
+          ggtheme = theme_bw(),
+          title = "L1 and ERV score KM plot",
+          palette =  "jco")
+
+
+L1ERVAlu_km_plot <- ggsurvplot(survfit(Surv(time, status) ~ ERV_score+L1_score+Alu_score, data = km_dat),
+          pval = TRUE,
+          conf.int = FALSE,
+          risk.table = TRUE, # Add risk table
+          risk.table.col = "strata", # Change risk table color by groups
+          linetype = "strata", # Change line type by groups
+          ggtheme = theme_bw(),
+          title = "Alu, L1 and ERV score KM plot",
+          palette =  "jco")
+
+
+
+# pairwise compasrion
+# Perform pairwise comparisons
+km_dat$Alu.L1.ERV_score <- paste0(km_dat$Alu_score, ".", km_dat$L1_score, ".", km_dat$ERV_score)
+
+pairwise_survdiff(Surv(time, status) ~ Alu.L1.ERV_score, data = km_dat, p.adjust.method = "none")
+
+```
+
+```{r chunk14  TE signature validation plotting, echo=FALSE }
+# Load libraries
+library(ggpubr)
+library(cowplot)
+library(FactoMineR)
+library(factoextra)
+
+tmp <-sigScore_mod[, c("Alu_score", "L1_score", "ERV_score")]
+
+
+
+#all(rownames(tmp) %in% rownames(clinical_data))
+tmp <- tmp[rownames(clinical_data),]
+tmp <- as.data.frame(cbind(clinical_data, tmp))
+
+# visualization 
+vis_df <- data.frame(barcode = tmp$barcode,
+                     Alu_score = tmp$Alu_score,
+                     L1_score = tmp$L1_score,
+                     ERV_score = tmp$ERV_score,
+                     mRNA_cluster= tmp$paper_mRNA.cluster)
+
+# drop neuronal and merge luminal
+vis_df$mRNA_cluster [vis_df$mRNA_cluster == "Neuronal"] <- NA
+vis_df$mRNA_cluster [vis_df$mRNA_cluster == "Luminal"] <- "Luminal_papillary"
+vis_df <- vis_df[!is.na(vis_df$mRNA_cluster),]
+
+
+# Scatter plot colored by mRNA_cluster
+scatter_plot1 <- ggscatter(vis_df, x = "Alu_score", y = "L1_score",
+                          color = "mRNA_cluster", palette = "jco",
+                          size = 3, alpha = 0.6) +
+  border()
+
+# Print the scatter plot
+print(scatter_plot1)
+
+# Scatter plot colored by mRNA_cluster
+scatter_plot2 <- ggscatter(vis_df, x = "Alu_score", y = "ERV_score",
+                          color = "mRNA_cluster", palette = "jco",
+                          size = 3, alpha = 0.6) +
+  border()
+
+# Print the scatter plot
+print(scatter_plot2)
+
+# Scatter plot colored by mRNA_cluster
+scatter_plot3 <- ggscatter(vis_df, x = "L1_score", y = "ERV_score",
+                          color = "mRNA_cluster", palette = "jco",
+                          size = 3, alpha = 0.6) +
+  border()
+
+# Print the scatter plot
+print(scatter_plot3)
+
+
+# PCA
+te.pca <- PCA(vis_df[,-c(1,5)], graph = FALSE)
+
+# vis
+pc1_plot <- fviz_pca_ind(te.pca,
+             geom.ind = "point", # show points only (nbut not "text")
+             col.ind = vis_df$mRNA_cluster, # color by groups
+            palette = c("#00AFBB", "#E7B800", "#FC4E07"),
+             addEllipses = TRUE, # Concentration ellipses
+             legend.title = "Clusters",title = ""
+             )
+
+
+
+# KM plots
+combined_plot <- cowplot::plot_grid(scatter_plot1, scatter_plot2, scatter_plot3,pc1_plot,
+                                    labels = c("A", "B", "C", "D"),
+                                    ncol = 2, nrow = 2)
+```
+
+```{r chunk14  TE signature validation clsutering samples, echo=FALSE, include=FALSE , eval=FALSE}
+library(CancerSubtypes)
+library(ConsensusClusterPlus)
+
+# 1 clustering using the TE expression at repName level
+tmp <- log2CPM[rownames(log2CPM) %in% overlap_cor_sig_allTEs_surv_tes_fdr_0.05,]
+
+# 2 Clustering using signature scores
+tmp_agg <- as.matrix(t(sigScore_mod[, c("Alu_score", "L1_score", "ERV_score")]))
+
+# Finding optimal clusters by CC
+results = ConsensusClusterPlus(tmp,
+                               maxK=10,
+                               reps=50,
+                               pItem=0.8,
+                               pFeature=1,
+                               title= "TE_sig",
+                               clusterAlg="pam",
+                               distance="spearman",
+                               seed=1262118388.71279,
+                               plot="pdf")
+
+
+# inspecting the results:
+#_________________________________#Assessing cluster assignment _________________________________#
+# TO extract cluster info from different K 
+getCCSil <- function(results, k = c(4:6)) {
+  res_list <- list()
+  
+  for (i in k) {
+    cc <- results[[i]]
+    Sil <- silhouette(x = cc[[3]], # x is a numeric vector that indicates cluster assignment for each data point
+                      dist = as.matrix(1 - cc[[4]])) # get dissimilarity df
+    
+    res <- cbind(cc$consensusClass, as.data.frame(Sil))
+    res$barcode <- rownames(res)
+    
+    res_list[[i]] <- res # 
+  }
+  
+  return(res_list)
+}
+
+
+# Extract details for CC on 
+#___________________________________all 43 TEs
+cc_result <- getCCSil(results, k = c(4:6))
+# rename columns
+colnames(cc_result[[4]])[1:4] <- paste0("k4_", colnames(cc_result[[4]])[1:4])
+colnames(cc_result[[5]])[1:4] <- paste0("k5_", colnames(cc_result[[5]])[1:4])
+colnames(cc_result[[6]])[1:4] <- paste0("k6_", colnames(cc_result[[6]])[1:4])
+# merging results
+# Merge cc_result[[4]] and cc_result[[5]] based on the common column "barcode"
+cc_res_df <- left_join(cc_result[[4]], cc_result[[5]], by = "barcode")
+
+# Merge the result with cc_result[[6]] based on the common column "barcode"
+cc_res_df <- left_join(cc_res_df, cc_result[[6]], by = "barcode")
+
+cc_res_df <- cc_res_df[, c("barcode", "k4_cluster", "k4_sil_width" ,"k5_cluster", "k5_sil_width", "k6_cluster", "k6_sil_width")]
+
+# consider 0.5 as cut-off for Sil width score:
+cc_res_df$k4_cluster[cc_res_df$k4_sil_width <= 0.5] <- NA
+cc_res_df$k5_cluster[cc_res_df$k5_sil_width <= 0.5] <- NA
+cc_res_df$k6_cluster[cc_res_df$k6_sil_width <= 0.5] <- NA
+
+# converting columns to factor
+for(col in c("k4_cluster","k5_cluster","k6_cluster")){
+  cc_res_df[, col] <- as.factor(cc_res_df[, col])
+}
+
+# # Extract details for CC on 
+# #___________________________________Alu_score, L1_score and ERV_score
+# cc_result <- getCCSil(results, k = c(6))
+# cc_res_df <-cc_result[[6]] 
+# cc_res_df <- cc_res_df[, c("barcode", "cluster")]
+# names(cc_res_df)[2] <- "TE_signature_consensus_cluster"
+# # renaming
+# cc_res_df$TE_signature_consensus_cluster <- paste0("TE_sigCluster_", cc_res_df$TE_signature_consensus_cluster)
+# TE_sigCluster <- cc_res_df
+# # save
+# save(TE_sigCluster, file= paste0(root_path, "r_objects/TE_sigCluster.RData"))
+load(paste0(root_path, "r_objects/TE_sigCluster.RData"))
+#________________________#Assessing cluster assignment: #Survival analysis _________________________#
+
+cc_res_df <- cc_res_df[cc_res_df$barcode %in% survData$barcode,]
+
+#all(cc_res_df$barcode==survData$barcode)
+# TRUE
+cc_res_df <- as.data.frame(c(survData, cc_res_df[,-1]))
+
+
+# limit to 5 year survvial
+cc_res_df$time <- cc_res_df$time/(365.25)
+cc_res_df$time[cc_res_df$time>5] <- 5
+
+# fitting cox
+coxph(Surv(time, status) ~ k5_cluster, data = cc_res_df)
+
+# pairwise:
+pairwise_survdiff(Surv(time, status) ~ k5_cluster, p.adjust.method = "none", data = cc_res_df)
+# to improve survival stat group clsuter 4 and 5 
+cc_res_df$k5_cluster[cc_res_df$k5_cluster==5] <- 4
+# re run pair wise comparsion
+pairwise_survdiff(Surv(time, status) ~ k5_cluster, p.adjust.method = "none", data = cc_res_df)
+
+
+# fitting KM
+# fitting surv model
+fit <- survfit(Surv(time, status) ~ k5_cluster, data = cc_res_df)
+# fitting curve
+# Change color, linetype by strata, risk.table color by strata
+ggsurvplot(fit,
+          pval = TRUE,
+          conf.int = FALSE,
+          risk.table = TRUE, # Add risk table
+          risk.table.col = "strata", # Change risk table color by groups
+          linetype = "strata", # Change line type by groups
+          ggtheme = theme_bw())
+
+```
+Considering K=5, using consensus clustering algorithm , there are 5 expression clusters and OS is significantly different between cluster1 and the rest of the cluster Also Cluster 2 OS is significantly different cluster3 and cluster4&5. To in the following plot 
+
+
+```{r chunk14  TE signature validation survival plot, echo=FALSE}
+surv_df <- cc_res_df[, c("barcode","status","time","k5_cluster")]
+colnames(surv_df)[4] <- "expression_cluster"
+surv_df$expression_cluster <- as.character(surv_df$expression_cluster)
+surv_df$expression_cluster[surv_df$expression_cluster==4] <- "4&5"
+
+# 
+clr <-c("#E7B800", "#2E9FDF", "#55CC55", "#FF6633")
+#clr <- c("#004080", "#00591A", "#994C26", "#996500")
+clr <- c("#0066A6", "#007D2D", "#FF6633", "#E7B800")
+
+
+fit <- survfit(Surv(time, status) ~ expression_cluster, data = surv_df)
+
+
+# plot KM
+ggsurvplot(fit,
+          pval = TRUE,
+          conf.int = FALSE,
+          risk.table = TRUE, # Add risk table
+          risk.table.col = "strata", # Change risk table color by groups
+          linetype = "strata", # Change line type by groups
+          ggtheme = theme_bw(),
+          palette = clr)
+
+```
+
+As mentioned above there are significant diffrences between clsuters in terms of their OS
+
+```{r chunk14  TE signature pair-wise survival comparsion, echo=FALSE}
+
+pairwise_survdiff(Surv(time, status) ~ expression_cluster, p.adjust.method = "none", data = surv_df)
+```
+
+If we use the ALu_score, L1_score and ERV_score , to cluster samples, there are 6 disticnt clsuers based on these signature and we will add them to the meta data and will use for later visulaization and assessment.
+
+
+
+```{r chunk14  TE signature validation lassco sig surv subgroup identification, echo=FALSE}
+
+library(rpart)
+set.seed(1234567890)
+
+# need to have a dataframe with time, status, and covariate
+rpart_dat <- sigScore_mod_lasso
+
+# select columns
+rpart_dat <- rpart_dat[, c("barcode","status","time","aggTE_sig")]
+# set colnames
+colnames(rpart_dat)[4] <- "TE_sig_score"
+
+rpart_dat <- rpart_dat[, -1]
+
+# Fit the tree with a specific complexity parameter (adjust the value)
+fit_tree <- rpart(Surv(time, status) ~ TE_sig_score,
+                  data = rpart_dat,
+                  cp = 0.02,
+                  minbucket = 50)
+
+# Extract terminal node predictions from the survival tree
+terminal_nodes <- predict(fit_tree, newdata = rpart_dat, type = "vector")
+
+# Create a new data frame with the terminal node predictions
+data_terminal <- cbind(rpart_dat, terminal_nodes)
+
+
+
+# sumary
+summary(fit_tree)
+
+
+# plotting
+plot(fit_tree)
+text(fit_tree)
+
+
+
+# create variables for later examination
+# Get unique values in terminal_nodes
+unique_nodes <- unique(data_terminal$terminal_nodes)
+# Create a named vector for labels
+node_labels <- paste0("TE_subgroup", seq_along(unique_nodes))
+# Replace the values in terminal_nodes with corresponding labels
+data_terminal$TE_subgroup <- node_labels[match(data_terminal$terminal_nodes, unique_nodes)]
+# convert the character column to a factor if needed
+data_terminal$TE_subgroup <- as.factor(data_terminal$TE_subgroup)
+
+
+
+# Fit survival curves for each terminal node
+surv_curves <- survfit(Surv(time, status) ~ TE_subgroup, data = data_terminal)
+# Plot the survival curves for each subgroup
+ggsurvplot(surv_curves,
+           pval = TRUE,
+           conf.int = T,
+           data = data_terminal, 
+           risk.table = TRUE,
+           ggtheme = theme_bw(),
+           palette =  "jco")
+
+
+
+# NEED TO BE ADJUSTED EACH TIME
+# cp02bucketsize50 =data_terminal$TE_subgroup
+# 
+# rpart_result_df <- data.frame(cp02bucketsize50 =cp02bucketsize50,
+#                              cp01bucketsize40 = cp01bucketsize40,
+#                              cp0bucketsize40 = cp0bucketsize40)
+# rpart_result_df$barcode <- sigScore_mod_lasso$barcode
+# rpart_result_df$time <- sigScore_mod_lasso$time
+# rpart_result_df$status <- sigScore_mod_lasso$status
+
+#save(rpart_result_df, file=paste0(root_path, "r_objects/rpart_result_df.RData"))
+# load 
+load(paste0(root_path, "r_objects/rpart_result_df.RData"))
+
+
+
+# pairwise survival analysis
+pairwise_survdiff(Surv(time, status) ~ cp02bucketsize50, p.adjust.method = "none", data = rpart_result_df)
+
+pairwise_survdiff(Surv(time, status) ~ cp0bucketsize40, p.adjust.method = "none", data = rpart_result_df)
+
+sf <- survfit(Surv(time, status) ~ cp02bucketsize50, data = rpart_result_df)
+# Plot the survival curves for each subgroup
+ggsurvplot(sf,
+           pval = TRUE,
+           data = rpart_result_df, 
+           risk.table = TRUE,
+           ggtheme = theme_bw(),
+           palette =  "jco")
+
+
+# calculate 5-yyr OS:
+rpart_result_df <- rpart_result_df %>%
+  mutate(years = time / 365.25,
+         surv_time_5yr = case_when(
+           years <= 5 ~ years,
+           TRUE ~ 5
+         ))
+
+
+# Compute survival curves for 5-year overall survival
+sf_5yr <- survfit(Surv(surv_time_5yr, status) ~ cp02bucketsize50, data = rpart_result_df)
+
+# Plot the 5-year survival curves for each subgroup
+ggsurvplot(sf_5yr,
+           pval = TRUE,
+           data = rpart_result_df,
+           conf.int = TRUE, 
+           risk.table = TRUE,
+           ggtheme = theme_bw(),
+           palette = "jco",
+           title = "5-Year Overall Survival",
+           xlab = "Time (Years)",  # Updated x-axis label
+           ylab = "5-years OS Probability",
+           legend.title = "",  # Customize the legend title
+           legend.labs = c("TE_subgroup1", "TE_subgroup2", "TE_subgroup3")) 
+
+
+# numbers based on the years:
+summary(sf_5yr, times = 1)
+
+#gtsummary:: tbl_summary(sf_5yr, times = 1)
+
+# a function to group samples inot subgroups
+predict_survival_group <- function(TE_sig_score) {
+  ifelse(TE_sig_score < 19.20052, "TE_subgroup2",
+         ifelse(TE_sig_score < 20.07009, "TE_subgroup3", "TE_subgroup1"))
+}
+
+
+```
+
+```{r chunk13  TE signature validation surv sub-group correlation with gsva, estimate, cibersort,regulon and xcell, echo=FALSE}
+library(ggpubr)
+library(ggsci)
+library(ggExtra)
+library(data.table)
+
+
+theme_set(theme_pubclean())
+
+# data frames
+sig_sub_group_df <- rpart_result_df[, c(1,2,3)]
+rownames(sig_sub_group_df) <- rpart_result_df$barcode
+
+# save gsva inot a tmp df
+tmp <- data.gsva[, c(1:77)]
+#
+tmp <- tmp[rownames(sig_sub_group_df),]
+
+#_____________________________________ John.P.Sfakianos.et.al gene sigs
+jps_data <- tmp[,grep("John.P.Sfakianos.et.al", colnames(tmp))]
+# vis data
+jps_data <- as.data.frame(cbind(sig_sub_group_df[,1], jps_data))
+
+cln <- c("TE_signature", "Luminal signature", "Basal signature","Squamous Diffrentiation signature", "Neuronal Differentiation signature", "Cancer Stem cell signature")
+
+# add column name:
+colnames(jps_data) <- cln
+
+# STAT tests
+# Perform ANOVA between TE_signature and Luminal signature
+anova_result <- aov(`Neuronal Differentiation signature` ~ TE_signature, data = jps_data)
+# Post-hoc analysis (Tukey HSD test)
+tukey_result <- TukeyHSD(anova_result)
+
+# Display ANOVA summary
+print(summary(anova_result))
+# Display Tukey HSD results
+print(tukey_result)
+
+
+# VISUALIZATION :
+# Melt the data frame for easy plotting
+melted_data <- reshape2::melt(jps_data, id.vars = "TE_signature")
+
+# visualization 
+ggplot(melted_data, aes(x = variable, y = value)) + 
+  geom_boxplot(aes(fill = TE_signature),position = position_dodge(0.9)) +
+  scale_fill_jco() +
+  stat_compare_means(aes(group = TE_signature), label = "p.signif") + 
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+
+
+# correlation analysis
+jps_data_cor <- jps_data[sigScore_mod_lasso$barcode, ]
+jps_data_cor$TE_signature_score <- sigScore_mod_lasso$aggTE_sig
+colnames(jps_data_cor)[1] <- "TE subgroups"
+colnames(jps_data_cor)[7] <- "TE signature score"
+
+# plotting
+plot <- ggplot(jps_data_cor, aes(y=`Basal signature`, x=`TE signature score`,
+                                col = `TE subgroups`))+
+  geom_point()+
+  theme(legend.position="bottom") + 
+  scale_color_jco()
+ 
+# use ggMarginal function to create marginal histogram
+basal_sg <- ggMarginal(plot, 
+           type="histogram",
+           groupColour = TRUE,
+           groupFill = TRUE)
+
+
+
+# plotting
+plot <- ggplot(jps_data_cor, aes(y=`Luminal signature`, x=`TE signature score`,
+                                col = `TE subgroups`))+
+  geom_point()+
+  theme(legend.position="bottom") + 
+  scale_color_jco()
+ 
+# use ggMarginal function to create marginal histogram
+lum_sg <- ggMarginal(plot, 
+           type="histogram",
+           groupColour = TRUE,
+           groupFill = TRUE)
+
+
+plot <- ggplot(jps_data_cor, aes(y=`Squamous Diffrentiation signature`, x=`TE signature score`,
+                                col = `TE subgroups`))+
+  geom_point()+
+  theme(legend.position="bottom") + 
+  scale_color_jco()
+ 
+# use ggMarginal function to create marginal histogram
+sq_diff_sg <- ggMarginal(plot, 
+           type="histogram",
+           groupColour = TRUE,
+           groupFill = TRUE)
+
+
+plot <- ggplot(jps_data_cor, aes(y=`Neuronal Differentiation signature`, x=`TE signature score`,
+                                col = `TE subgroups`))+
+  geom_point()+
+  theme(legend.position="bottom") + 
+  scale_color_jco()
+ 
+# use ggMarginal function to create marginal histogram
+nue_diff_sg <- ggMarginal(plot, 
+           type="histogram",
+           groupColour = TRUE,
+           groupFill = TRUE)
+
+plot <- ggplot(jps_data_cor, aes(y=`Cancer Stem cell signature`, x=`TE signature score`,
+                                col = `TE subgroups`))+
+  geom_point()+
+  theme(legend.position="bottom") + 
+  scale_color_jco()
+ 
+# use ggMarginal function to create marginal histogram
+cancerStemcell_diff_sg <- ggMarginal(plot, 
+           type="histogram",
+           groupColour = TRUE,
+           groupFill = TRUE)
+
+
+# generate a heatmap
+htm_df <- jps_data_cor[, c(2:6)]
+
+# to be added. 
+
+
+
+#_____________________________ Combes Gene Signature______________________#
+combes_genesig_data <- tmp[,grep("Combes.et.al.GeneSig", colnames(tmp))]
+# vis data
+combes_genesig_data <- as.data.frame(cbind(sig_sub_group_df[,1], combes_genesig_data))
+# edit column header
+colnames(combes_genesig_data) <- gsub("Combes.et.al.GeneSig_", "", colnames(combes_genesig_data))
+#
+colnames(combes_genesig_data)[1] <- "TE_signature"
+# STAT tests
+# Perform ANOVA between TE_signature and Luminal signature
+anova_result <- aov(Myeloid ~ TE_signature, data = combes_genesig_data)
+# Post-hoc analysis (Tukey HSD test)
+tukey_result <- TukeyHSD(anova_result)
+
+# Display ANOVA summary
+print(summary(anova_result))
+# Display Tukey HSD results
+print(tukey_result)
+
+# VISUALIZATION :
+# Melt the data frame for easy plotting
+melted_data <- reshape2::melt(combes_genesig_data, id.vars = "TE_signature")
+# visualization 
+ggplot(melted_data, aes(x = variable, y = value)) + 
+  geom_boxplot(aes(fill = TE_signature),position = position_dodge(0.9)) +
+  scale_fill_jco() +
+  stat_compare_means(aes(group = TE_signature), label = "p.signif") + 
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+
+#_____________________________ Combes cell phenotypes______________________#
+combes_pheno_data <- tmp[,grep("Combes.et.al.Penotype_", colnames(tmp))]
+# vis data
+combes_pheno_data <- as.data.frame(cbind(sig_sub_group_df[,1], combes_pheno_data))
+# edit column header
+colnames(combes_pheno_data) <- gsub("Combes.et.al.Penotype_", "", colnames(combes_pheno_data))
+#
+colnames(combes_pheno_data)[1] <- "TE_signature"
+# STAT tests
+# Perform ANOVA between TE_signature and Luminal signature
+anova_result <- aov(Myeloid ~ TE_signature, data = combes_genesig_data)
+# Post-hoc analysis (Tukey HSD test)
+tukey_result <- TukeyHSD(anova_result)
+
+# Display ANOVA summary
+print(summary(anova_result))
+# Display Tukey HSD results
+print(tukey_result)
+
+# VISUALIZATION :
+# Melt the data frame for easy plotting
+melted_data <- reshape2::melt(combes_pheno_data, id.vars = "TE_signature")
+# visualization 
+ggplot(melted_data, aes(x = variable, y = value)) + 
+  geom_boxplot(aes(fill = TE_signature),position = position_dodge(0.9)) +
+  scale_fill_jco() +
+  stat_compare_means(aes(group = TE_signature), label = "p.signif") + 
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+
+
+
+# significant cor:
+filt_cor_TE_sigScore_gsva <- cor_TE_sigScore_gsva[abs(cor_TE_sigScore_gsva$correlation_coefficient) >= 0.4 & 
+                                                    cor_TE_sigScore_gsva$FDR <= 0.05,]
+# create list 
+cor_TE_gsva_list <- split(filt_cor_TE_sigScore_gsva, filt_cor_TE_sigScore_gsva$var1)
+
+# 2________CIBERSORT deconv. immune cell types: https://bmccancer.biomedcentral.com/articles/10.1186/s12885-022-09794-9 Table S4
+cibersortDAt <- readRDS(paste0(root_path, "r_objects/cibersortDAt.RDS"))
+#
+all(sigScore_mod_lasso$barcode %in% rownames(cibersortDAt))
+#
+cibersortDAt <- cibersortDAt[sigScore_mod_lasso$barcode,]
+#
+all(sigScore_mod_lasso$barcode==rownames(cibersortDAt))
+# perform correlation analysis 
+cor_TE_sigScore_cibersort <- correlateMatrix(as.data.frame(sigScore_mod_lasso[,8]), cibersortDAt)
+
+filt_cor_TE_sigScore_cibersort <- cor_TE_sigScore_cibersort[abs(cor_TE_sigScore_cibersort$correlation_coefficient) >= 0.4 & 
+                                                    cor_TE_sigScore_cibersort$FDR <= 0.1,]
+#___NO SIG RESULTS OBTAINED
+
+
+# 3______________________ ESTIMATE + TME
+
+tmp <- sigScore_mod_lasso
+rn <- substr(sigScore_mod_lasso$barcode,1,15)
+tmp <- tmp[ !duplicated(rn),]
+rownames(tmp) <- rn[!duplicated(rn)]
+# filter based on the target df
+tmp <- tmp[rownames(tmp) %in% rownames(estDattmeDat),]
+# re-setting row order
+estDattmeDat <- estDattmeDat[rownames(tmp),]
+#
+#
+all(rownames(tmp)==rownames(estDattmeDat))
+# perform correlation analysis 
+cor_TE_sigScore_estTme <- correlateMatrix(as.data.frame(tmp[,8]), estDattmeDat)
+
+
+filt_cor_TE_sigScore_estTme <- cor_TE_sigScore_estTme[abs(cor_TE_sigScore_estTme$correlation_coefficient) >= 0.4 & 
+                                                   cor_TE_sigScore_estTme$FDR <= 0.05,]
+# 
+# NO SIG RESULT
+
+
+# 3____________ x-cell
+##
+xcell = data.frame(data.table::fread(paste0(root_path, "xCell_TCGA_RSEM.txt")), row.names = T)
+# repair sample name in header
+colnames(xcell) = gsub('[.]', "-", colnames(xcell))
+xcell = t(xcell)
+# tmp TE sig score
+#
+xcell <- xcell[rownames(xcell) %in% rownames(tmp),]
+#
+tmp <- tmp[rownames(xcell),]
+#
+all(rownames(tmp)==rownames(xcell))
+
+# correlation
+cor_TE_sigScore_xcell <- correlateMatrix(as.data.frame(tmp[,8]), xcell)
+filt_cor_TE_sigScore_xcell <- cor_TE_sigScore_xcell[abs(cor_TE_sigScore_xcell$correlation_coefficient) >= 0.4 & 
+                                                        cor_TE_sigScore_xcell$FDR <= 0.05,]
+# create list 
+cor_TE_xcell_list <- split(filt_cor_TE_sigScore_xcell, filt_cor_TE_sigScore_xcell$var1)
+
+
+# 4 _______ regulon score 
+# Ananlysis was performed using RTN.R script
+
+# to load the object regulon_activity
+load("~/Transposons_Exp_BLCA_GitHub/RTN_files/regulon_activity.RData")
+#
+tmp <- sigScore_mod_lasso
+
+# filter based on the target df
+tmp <- tmp[tmp$barcode %in% rownames(regulon_activity),]
+# re-setting row order
+regulon_activity <- regulon_activity[tmp$barcode,]
+#
+#
+all(tmp$barcode==rownames(regulon_activity))
+# perform correlation analysis 
+cor_TE_sigScore_regulon <- correlateMatrix(as.data.frame(tmp[,8]), regulon_activity)
+filt_cor_TE_sigScore_regulon <- cor_TE_sigScore_regulon[abs(cor_TE_sigScore_regulon$correlation_coefficient) >= 0.4 & 
+                                                   cor_TE_sigScore_regulon$FDR <= 0.05,]
+# create list 
+cor_TE_regulon_list <- split(filt_cor_TE_sigScore_regulon, filt_cor_TE_sigScore_regulon$var1)
+
+
+# Dataset preparation for correlative analysis 
+df <- rpart_result_df[, c(4,5,6,1,2,3)]
+colnames(df)[4:6] <- c("TE_subgroups_cp02bs50", "TE_subgroups_cp01bs40","TE_subgroups_cp0bs40")
+# Add numerical signature
+all(df$barcode == sigScore_mod_lasso$barcode)
+#
+df <-as.data.frame(cbind(df, sigScore_mod_lasso[,c(8,4,5,6)]))
+colnames(df)[7:10] <- c("TE_signature_score", "Alu_signature_score", "L1_signature_score", "ERV_signature_score")
+
+# Adding cell signature scores
+tmp <- data.gsva[, c(1:77)]
+#
+tmp <- tmp[rownames(sig_sub_group_df),]
+
+all(df$barcode == rownames(tmp))
+# 
+df <- as.data.frame(cbind(df, tmp))
+# Adding regulon activity score
+selected_regulon <- as.data.frame(regulon_activity[, colnames(regulon_activity) %in% filt_cor_TE_sigScore_regulon$var2])
+colnames(selected_regulon) <- paste0(colnames(selected_regulon), "_regulon")
+selected_regulon$barcode <- rownames(selected_regulon)
+# filteration
+selected_regulon <- selected_regulon[selected_regulon$barcode %in% df$barcode,]
+selected_regulon <- selected_regulon[df$barcode,]
+#
+df <-left_join(df, selected_regulon)
+#
+cl <- clinical_data[clinical_data$barcode %in% df$barcode,]
+cl <- cl[df$barcode,]
+#
+df <-left_join(df, cl)
+df <- df[, -c(127:201)]
+#
+fwrite(df, "G:/LINE1-BLCA/corelation_analysis_dataset.csv")
+
+```
+
+
+## 3. Methylation analysis
+
+```{r chunk  methylation and TEs, echo=FALSE}
+#___________________________________ TO identify TEs with super low expression in cohort______________________#
+# load libs
+library(DESeq2)
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+library(fuzzyjoin)
+library(ggsci)
+library(EnhancedVolcano)
+library(regioneR)
+
+# Set options to display numbers without scientific notation
+options(scipen = 999, digits = 10)
+# load mapping object build earlier 
+
+#_____________________ 1 Preparing needed datasets _________________________#
+
+#_______________________1.1 Mapping TEs to CpGs_____________________________#
+# loading CpGs annotation data
+ann450k_hg19 <- getAnnotation(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+# preparing input for liftover from hg19 to hg38
+lo_input <- data.frame(chr = ann450k_hg19$chr,
+                       start=ann450k_hg19$pos,
+                       end= ann450k_hg19$pos+1,
+                       strand =ann450k_hg19$strand,
+                       Name = ann450k_hg19$Name)
+data.table::fwrite(lo_input, "liftOver_input.tsv", sep = "\t", col.names = FALSE)
+
+# CpGs coord:lifted intermediate dataset
+lfthg <- data.table::fread("G:/LINE1-BLCA/hglft_genome_27eca_713d10.bed")
+colnames(lfthg) <- c("chr", "start", "end", "strand", "Name")
+lfthg <- lfthg[,-4]
+# TE coodinates
+# read expression per loci data
+intg <- as.data.frame(data.table::fread("G:/LINE1-BLCA/RE_intergenic_4_loci_raw_counts.gz"))
+# setting rownames
+rn <- intg$V1
+intg <- intg[,-1]
+rownames(intg) <- rn
+# Split by TE names
+te_cords <- as.data.frame(str_split(rownames(intg), "\\|", simplify = TRUE))
+# Split by coord string
+te_cords <- as.data.frame(cbind(te_cords, str_split(te_cords$V4, "_", simplify = TRUE)))
+# reorder columns
+te_cords <- te_cords[, c(5,7,8,1,2,3)]
+colnames(te_cords) <- c("chr", "start", "end", "repName", "repFamily", "repClass")
+# changing column to numerical
+te_cords$start <- as.numeric(te_cords$start)
+te_cords$end <- as.numeric(te_cords$end)
+# adding chr 
+te_cords$chr <- paste0("chr", te_cords$chr)
+# intersection
+cpg_to_te_map <- genome_inner_join(lfthg, te_cords, by = c("chr", "start", "end"), type = "any", maxgap = 5000)
+colnames(cpg_to_te_map)[1:10] <- c("chr_CpG", "start_CpG", "end_CpG", "Name", "chr_TE", "start_TE", "end_TE", "repName", "repFamily","repClass")
+# Add distance to TSS and TES
+cpg_to_te_map$distance_to_TSS <-cpg_to_te_map$start_TE - cpg_to_te_map$start_CpG 
+cpg_to_te_map$distance_to_TES <-cpg_to_te_map$end_TE - cpg_to_te_map$start_CpG 
+
+# New mapping stategy
+# the interval object is created using rmsk_processing JupyterNOtebook 
+ #processed on CC 
+#[ghaedi@cedar1 loci_wise_TE_exp]$ sort -k1,1 -k2,2n te_mapped_cpgs_hg38_1k_paded_20240108.tsv > te_mapped_cpgs_hg38_1k_paded_20240108.bed
+#[ghaedi@cedar1 loci_wise_TE_exp]$ sort -k1,1 -k2,2n te_mapped_cpgs_hg38_10k_paded_20240108.tsv > te_mapped_cpgs_hg38_10k_paded_20240108.bed
+#[ghaedi@cedar1 loci_wise_TE_exp]$ bedtools intersect -a ann450K_lifted_hg38.bed -b te_mapped_cpgs_hg38_1k_paded_20240108.bed  -sorted -wo > te_1kb_cpgs.bed
+# [ghaedi@cedar1 loci_wise_TE_exp]$ bedtools intersect -a ann450K_lifted_hg38.bed -b te_mapped_cpgs_hg38_10k_paded_20240108.bed  -sorted -wo > te_10kb_cpgs.bed
+
+
+te_1k_intervals <- data.table::fread("G:/LINE1-BLCA/te_1kb_cpgs.bed", sep = "\t")
+te_5k_intervals <- data.table::fread("G:/LINE1-BLCA/te_10kb_cpgs.bed", sep = "\t")
+
+# sanity check
+length(unique(te_1k_intervals$V4))
+#[1] 99031 >> close to the number reported bt kong et al
+cpg_to_te_map <- te_1k_intervals[, c(1:10)]
+colnames(cpg_to_te_map) <- c("chr_CpG", "start_CpG", "end_CpG", "Name", "chr_TE", "start_TE", "end_TE", "repName", "repFamily","repClass")
+#
+cpg_to_te_map_5k <- te_5k_intervals[, c(1:10)]
+colnames(cpg_to_te_map_5k) <- c("chr_CpG", "start_CpG", "end_CpG", "Name", "chr_TE", "start_TE", "end_TE", "repName", "repFamily","repClass")
+
+
+#_______________________1.2 Preparing Methylation Matrices_____________________________#
+# reading M value file
+# Methylation datasets
+m_all <- readRDS(paste0(root_path, "mval.RDS"))
+
+#_______________ create a sample manifest
+sample_manifest <- data.frame(exp_barcode = colnames(GENE_1_raw_counts),
+                              exp_sample = substr(colnames(GENE_1_raw_counts),1,16),
+                              exp_sample_type = ifelse(substr(colnames(GENE_1_raw_counts),14,15)=="11", "NT", "TP"),
+                              patient = substr(colnames(GENE_1_raw_counts),1,12))
+tmp <- data.frame(met_barcode = colnames(m_all),
+                  met_sample = substr(colnames(m_all),1,16),
+                  met_sample_type = ifelse(substr(colnames(m_all),14,15)=="11", "NT", "TP"),
+                  patient = substr(colnames(m_all),1,12))
+
+sample_manifest <- full_join(sample_manifest, tmp)
+
+# Adding more columns 
+for(s in unique(sample_manifest$patient)){
+  tmp <- sample_manifest[sample_manifest$patient==s,]
+  exp_matched[s] <- ifelse(length(unique(tmp$exp_sample_type)) > 1, TRUE, FALSE)
+  met_matched[s] <- ifelse(length(unique(tmp$met_sample_type)) > 1, TRUE, FALSE)
+}
+#
+sample_manifest$exp_tum_w_macthed <- ifelse(sample_manifest$patient %in% names(exp_matched)[exp_matched] & 
+                                              sample_manifest$exp_sample_type=="TP", TRUE, FALSE)
+sample_manifest$met_tum_w_macthed <- ifelse(sample_manifest$patient %in% names(met_matched)[met_matched]& 
+                                              sample_manifest$met_sample_type=="TP", TRUE, FALSE)
+sample_manifest$exp_outlier_samples <- ifelse(sample_manifest$exp_barcode %in% outlier_samples, TRUE, FALSE)
+#____________________________________________
+
+# Subset by barcode
+m_benign <- m_all[, colnames(m_all) %in% sample_manifest$met_barcode[sample_manifest$met_sample_type=="NT" &
+                                                                      !sample_manifest$exp_outlier_samples]]
+m_tumor_matched_norm <- m_all[, colnames(m_all) %in% sample_manifest$met_barcode[sample_manifest$met_tum_w_macthed &
+                                                                       !sample_manifest$exp_outlier_samples]]
+m_tum_all <- m_all[, colnames(m_all) %in% sample_manifest$met_barcode[sample_manifest$met_sample_type=="TP" & 
+                                                                        !sample_manifest$exp_outlier_samples]]
+
+# Collapse samples from the same patient
+m_benign <- collapse_duplicated_samples(m_benign)
+m_tumor_matched_norm <- collapse_duplicated_samples(m_tumor_matched_norm)
+m_tum_all <- collapse_duplicated_samples(m_tum_all)
+
+
+# calculating mean M-values and delta value :
+all(rownames(m_benign)== rownames(m_tumor_matched_norm))
+# TRUE
+
+# 
+delta_mval <- data.frame(Name =rownames(m_benign),
+                         mean_Tumor_w_Matched = rowMeans(m_tumor_matched_norm),
+                         mean_Benign = rowMeans(m_benign),
+                         mean_Tumor_all = rowMeans(m_tum_all))
+# adding more columns
+delta_mval$deltaM_T_w_M <- delta_mval$mean_Tumor_w_Matched - delta_mval$mean_Benign
+delta_mval$deltaM_T_all <- delta_mval$mean_Tumor_all - delta_mval$mean_Benign
+
+# Add more columns to methyl dataste by doing DMC analysis 
+tmp <- as.matrix(cbind(m_tumor_matched_norm, m_benign))
+tmp_all <- as.matrix(cbind(m_tum_all, m_benign))
+
+# Create a data frame with 'barcode' and 'sample_type'
+cln <- data.frame(
+  barcode = colnames(tmp),
+  sample_type = relevel(
+    as.factor(c(rep("TP", ncol(m_tumor_matched_norm)), rep("NT", ncol(m_benign)))),
+    ref = "NT"
+  )
+)
+# setting rownames
+rownames(cln) <- colnames(tmp)
+
+# For all samples
+cln_all <- data.frame(
+  barcode = colnames(tmp_all),
+  sample_type = relevel(
+    as.factor(c(rep("TP", ncol(m_tum_all)), rep("NT", ncol(m_benign)))),
+    ref = "NT"
+  )
+)
+# setting rownames
+rownames(cln_all) <- colnames(tmp_all)
+
+#_____________ DMC analysis________________#
+design <- model.matrix(~ sample_type, data = cln)
+
+# fit the linear model 
+fit <- lmFit(tmp, design)
+fit2 <- eBayes(fit)
+# extracting significantly methylated probes
+deff_meth = topTable(fit2, coef=ncol(design), sort.by="p",number = nrow(tmp), adjust.method = "fdr")
+deff_meth$Name <- rownames(deff_meth)
+deff_meth$percentage_change_logFC <- 100 * (2^deff_meth$logFC - 1)
+
+#update the object
+met <- left_join(delta_mval, deff_meth)
+
+#________________DMC for all TUmors + Normals ________________#
+design <- model.matrix(~ sample_type, data = cln_all)
+
+# fit the linear model 
+fit <- lmFit(tmp_all, design)
+fit2 <- eBayes(fit)
+# extracting significantly methylated probes
+deff_meth = topTable(fit2, coef=ncol(design), sort.by="p",number = nrow(tmp), adjust.method = "fdr")
+colnames(deff_meth) <- paste0(colnames(deff_meth), "_all_Tum")
+deff_meth$Name <- rownames(deff_meth)
+deff_meth$percentage_change_logFC_all_Tum <- 100 * (2^deff_meth$logFC_all_Tum - 1)
+
+#update the object
+met <- left_join(met, deff_meth)
+
+
+
+
+#_______________________1.3 Preparing Expression values_____________________________#
+
+#____________________Tum_w_Matched_Normal___________________#
+sel_barcode <- na.omit(unique(sample_manifest$exp_barcode[sample_manifest$exp_sample_type=="NT"]))
+sel_barcode <- c(sel_barcode,unique(sample_manifest$exp_barcode[sample_manifest$exp_tum_w_macthed]))                                            
+sel_barcode <- sel_barcode[which(sel_barcode %in% sample_manifest$exp_barcode[!sample_manifest$exp_outlier_samples])]
+# expDatata
+raw_exp_t_w_m <- RE_intergenic_1_raw_counts[, colnames(RE_intergenic_1_raw_counts) %in% sel_barcode]
+# clinical data
+clin <- clinical_data[rownames(clinical_data) %in% colnames(raw_exp_t_w_m),]
+# row ordering
+clin <- clin[colnames(raw_exp_t_w_m),]
+clin$sample_type <- relevel(as.factor(gsub(" ", "_", clin$sample_type)), ref = "Solid_Tissue_Normal")
+#
+dds <- DESeqDataSetFromMatrix(countData = round(raw_exp_t_w_m),
+                              colData = clin,
+                              design = ~ sample_type)
+# prefilteration: it is not necessary but recommended to filter out low expressed genes
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+dds <- DESeq(dds)
+res <- results(dds, alpha = 0.1) 
+# save as df 
+res_DE <-as.data.frame(res)
+res_DE$repName <- rownames(res_DE)
+
+# normalization :
+ntd_norm_tum_w_norm <- assay(normTransform(dds))
+
+#____________________all_Tum_vs_Normal___________________#
+sel_barcode <- sel_barcode <- na.omit(unique(sample_manifest$exp_barcode))
+sel_barcode <- sel_barcode[which(sel_barcode %in% sample_manifest$exp_barcode[!sample_manifest$exp_outlier_samples])]
+# expDatata
+raw_exp <- RE_intergenic_1_raw_counts[, colnames(RE_intergenic_1_raw_counts) %in% sel_barcode]
+# clinical data
+clin <- clinical_data[rownames(clinical_data) %in% colnames(raw_exp),]
+# row ordering
+clin <- clin[colnames(raw_exp),]
+clin$sample_type <- relevel(as.factor(gsub(" ", "_", clin$sample_type)), ref = "Solid_Tissue_Normal")
+#
+dds <- DESeqDataSetFromMatrix(countData = round(raw_exp),
+                              colData = clin,
+                              design = ~ sample_type)
+# prefilteration: it is not necessary but recommended to filter out low expressed genes
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+dds <- DESeq(dds)
+res <- results(dds, alpha = 0.1)
+# save as df
+res_DE_all <-as.data.frame(res)
+#colnames(res_DE_all) <- paste0("all_Tum", colnames(res_DE_all))
+res_DE_all$repName <- rownames(res_DE_all)
+#res_DE <- left_join(res_DE, res_DE_all, by= "repName")
+#res_DE$precent_change <- 100*(2^res_DE$all_Tumlog2FoldChange-1)
+# Filt
+res_DE_all_filt <- res_DE_all[abs(res_DE_all$log2FoldChange) >= 0.5 & res_DE_all$padj <= 0.05,]
+
+# # create normalized count matrix
+# ntd_norm <- assay(normTransform(dds))
+# 
+# te_mean_exp <- data.frame(repName = rownames(ntd_norm),
+#                           mean_tum = rowMeans(ntd_norm[, colnames(ntd_norm) %in% barcodeTumor_all]),
+#                           mean_benign = rowMeans(ntd_norm[, colnames(ntd_norm) %in% barcodeNorm_all]))
+# te_mean_exp$delta_val <- te_mean_exp$mean_tum - te_mean_exp$mean_benign
+# # filt based on |10%| change in expression and FDR <= 0.05
+# te_mean_exp <- te_mean_exp[te_mean_exp$repName %in% res_DE_filt$repName,]
+# te_mean_exp <- left_join(te_mean_exp, res_DE_filt[, c(7, 14)], )
+# # filter to only retain those with at least 10% changes in theri value
+
+
+
+
+
+#_____________________ 2-1 Performing analysis: per-sample average M values at all CpGs within 1_kb of TEs vs aggregated intergenic TE expression at the subfamily level _________________________#
+map = cpg_to_te_map
+met_cpg <- m_all[rownames(m_all) %in% map$Name,]
+# 
+cat("Number of CpGs in +/- 1Kb of TEs TSS is ", length(unique(map$Name)), "of which," , nrow(met_cpg), "have methylation values available" )
+
+met <- data.frame(met_barcode = colnames(m_all),
+                  mean_Mval = colMeans(m_all))
+
+# for expression log2CPM values
+# Convert the matrix to a DGEList object
+dge <- DGEList(counts = RE_intergenic_1_raw_counts)
+# Perform library size normalization using the RLE algorithm
+dge <- calcNormFactors(dge, method = "RLE")
+# Obtain log2CPM with a prior count of 5
+exp <- cpm(dge, prior.count = 5, log = TRUE)
+
+exp <- data.frame(exp_barcode = colnames(exp),
+                  mean_logCPM = colMeans(exp))
+
+met_exp <- left_join(sample_manifest[, c(1:7)], met)
+met_exp <- left_join(met_exp, exp)
+# dropping NAs
+met_exp <- data.frame(na.omit(met_exp))
+# 
+
+# to see how many exp probe are asscoaited with each met barcode
+summary_df <- me %>%
+  group_by(patient) %>%
+  summarize(
+    num_met_barcodes = n_distinct(met_barcode),
+    num_exp_barcodes = n_distinct(exp_barcode),
+    exp_sample_types = toString(unique(exp_sample_type)),
+    met_sample_types = toString(unique(met_sample_type))
+  )
+
+# exp barcodes from pateints where there is no methylation data avaiable for that sample type
+# TCGA-BT-A20Q NT 
+# TCGA-BT-A2LB NT 
+# met barcodes from pateints where there is no exp data avaiable for that sample type
+# TCGA-BT-A20J NT 
+# TCGA-BT-A20P NT 
+# TCGA-BT-A20V NT
+# TCGA-BT-A20X NT
+ to_drop_exp_b <- met_exp$exp_barcode[met_exp$patient %in% c("TCGA-BT-A20Q", "TCGA-BT-A2LB") & met_exp$exp_sample_type=="NT"]
+ to_drop_met_b <- met_exp$met_barcode[met_exp$patient %in% c("TCGA-BT-A20J","TCGA-BT-A20P","TCGA-BT-A20V","TCGA-BT-A20X") & met_exp$met_sample_type=="NT"]
+ 
+ # identify samples with pairs of tumor and normal
+ paired_samples_exp <- summary_df$patient[summary_df$exp_sample_types == "NT, TP" | summary_df$exp_sample_types == "TP, NT"]
+ paired_samples_met <- summary_df$patient[summary_df$met_sample_types == "NT, TP" | summary_df$met_sample_types == "TP, NT"]
+# these two should be the same 
+ 
+ 
+ 
+#
+me <- met_exp[-which(met_exp$exp_barcode %in% to_drop_exp_b | met_exp$met_barcode %in% to_drop_met_b),]
+# re-ordering dataset
+me_e <- me[, -c(5:8)]
+me_e$uid <- paste0(me_e$patient, "_", me_e$exp_sample_type)
+me_m <- me[, c(4:8)]
+me_m$uid <- paste0(me_m$patient, "_", me_m$met_sample_type)
+#
+me <- left_join(me_e, me_m[, -1], by= "uid")
+# dedup
+me <- unique(me)
+
+# save sample orders and ids
+barcode_met_exp <- me[, -c(5,10)]
+barcode_met_exp$is_paired <- ifelse(barcode_met_exp$patient %in% paired_samples_exp, TRUE, FALSE)
+
+#______________________ correlation analysis : in All sample
+cor.test(me$mean_logCPM, me$mean_Mval)
+
+#Pearson's product-moment correlation
+
+#data:  me$mean_logCPM and me$mean_Mval
+#t = -4.9, df = 429, p-value = 0.000001
+#alternative hypothesis: true correlation is not equal to 0
+#95 percent confidence interval:
+# -0.3185 -0.1396
+#sample estimates:
+#   cor 
+#-0.231 
+
+# ______________________in samples with paired data 
+# correlation analysis : in All sample
+cor.test(me$mean_logCPM[me$patient %in% paired_samples_exp], me$mean_Mval[me$patient %in% paired_samples_exp])
+# Pearson's product-moment correlation
+# 
+# data:  me$mean_logCPM[me$patient %in% paired_samples_exp] and me$mean_Mval[me$patient %in% paired_samples_exp]
+# t = -2.8, df = 34, p-value = 0.008
+# alternative hypothesis: true correlation is not equal to 0
+# 95 percent confidence interval:
+#  -0.6664 -0.1213
+# sample estimates:
+#     cor 
+# -0.4326 
+
+# Visualization
+df <- me[me$patient %in% paired_samples_exp,]
+
+# Create a scatterplot with colored dots based on exp_sample_type
+
+# Calculate correlation coefficient and p-value
+correlation_result <- cor.test(df$mean_logCPM, df$mean_Mval)
+# and fit a linear regression line
+
+met_exp_cor_plot <- ggplot(df, aes(x = mean_logCPM, y = mean_Mval, color = exp_sample_type)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+  labs(title = "A. All TE loci(+/-500 bp) in tumor-benign paired samples",
+       x = "average log2CPM", y = "average M value") +
+  annotate("text", x = max(df$mean_logCPM), y = min(df$mean_Mval),
+           label = paste("cor. coef:", round(correlation_result$estimate, 3),
+                         "\nP-value:", signif(correlation_result$p.value, digits = 3)),
+           hjust = 1, vjust = -0.3, color = "black") +
+  scale_color_manual(name = "Sample Type",
+                     values = c("TP" = "red", "NT" = "green"),
+                     labels = c("TP" = "Tumor sample", "NT" = " Benign sample"),
+                     guide = FALSE) +  # Remove legend key for color
+  theme_minimal()
+
+met_exp_cor_plot
+
+#_______________ For DE TE
+dge <- DGEList(counts = RE_intergenic_1_raw_counts)
+dge <- calcNormFactors(dge, method = "RLE")
+exp <- cpm(dge, prior.count = 5, log = TRUE)
+exp <- exp[rownames(exp) %in% res_DE_all_filt$repName,]
+exp <- data.frame(exp_barcode = colnames(exp), mean_logCPM = colMeans(exp))
+met_exp <- left_join(sample_manifest[, c(1:7)], as.data.frame(met))
+met_exp <- left_join(met_exp, exp)
+# dropping NAs
+met_exp <- data.frame(na.omit(met_exp))
+#
+me <- met_exp[-which(met_exp$exp_barcode %in% to_drop_exp_b | met_exp$met_barcode %in% to_drop_met_b),]
+# re-ordering dataset
+me_e <- me[, -c(5:8)]
+me_e$uid <- paste0(me_e$patient, "_", me_e$exp_sample_type)
+me_m <- me[, c(4:8)]
+me_m$uid <- paste0(me_m$patient, "_", me_m$met_sample_type)
+#
+me <- left_join(me_e, me_m[, -1], by= "uid")
+# dedup
+me <- unique(me)
+
+# Visualization
+df <- me
+
+# remove outliers and bening samples:
+#df <- df[-which(df$exp_barcode %in% barcodeNorm_all),]
+
+#correlation_result <- cor.test(df$mean_logCPM, df$mean_Mval)
+# and fit a linear regression line
+
+met_exp_cor_plot_2 <- ggplot(df, aes(x = mean_logCPM, y = mean_Mval, color = exp_sample_type)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+  labs(title = "B. DE TE loci(+/-500 bp) in all samples",
+       x = "average log2CPM", y = "average M value") +
+  scale_color_manual(name = "Sample Type",
+                     values = c("TP" = "red", "NT" = "green"),
+                     labels = c("TP" = "Tumor sample", "NT" = " Benign sample")) +
+  theme_minimal()
+met_exp_cor_plot_2 
+
+```
+## 4. scRNA and TE expression 
+
+```{r chunk  scRNA and TEs, echo=FALSE}
+
+library(tidyverse)
+library(Seurat)
+library(SeuratObject)
+library(patchwork)
+library(cowplot)
+library(ggsci)
+
+#####__________________________________soloTE_outputs_processing_______________________________________________######
+
+#
+# # reading files
+# data_path <- "G:/soloTE_outputs"
+# 
+# scTE_files <- list.files(data_path)
+# scTE_files<- scTE_files[grepl('_SoloTE_output',scTE_files,perl=T)]
+# 
+# #
+# 
+# #_______________________________Loading single-cell RNA-seq count data________________#
+# # Extract sample names from file names
+# sample_names <- sub("_SoloTE_output", "", scTE_files)
+# 
+# # Initialize a list to store Seurat objects
+# seurat_list <- list()
+# 
+# # Loop through scTE_files
+# for (i in seq_along(scTE_files)) {
+#   file <- scTE_files[i]
+#   sample_name <- sample_names[i]
+#   print(paste0(file))
+# 
+#   # Read data and create Seurat object
+#   seurat_data <- Read10X(data.dir = paste0("G:/soloTE_outputs/", file))
+#   seurat_obj <- CreateSeuratObject(counts = seurat_data,
+#                                    min.features = 100,
+#                                    project = sample_name)
+# 
+#   # Add Seurat object to the list
+#   seurat_list[[sample_name]] <- seurat_obj
+# }
+# 
+# # Merge all Seurat objects into one
+# merged_seurat <- merge(x = seurat_list[[1]],
+#                        y = seurat_list[-1],  # Exclude the first Seurat object
+#                        add.cell.id = sample_names)
+# 
+# 
+# #_______________________________# Quality control_________________________#
+# #Explore merged metadata
+# View(merged_seurat@meta.data)
+# 
+# 
+# #Add number of genes per UMI for each cell to metadata
+# merged_seurat$log10GenesPerUMI <- log10(merged_seurat$nFeature_RNA) / log10(merged_seurat$nCount_RNA)
+# 
+# 
+# # Create metadata dataframe
+# metadata <- merged_seurat@meta.data
+# # Add cell IDs to metadata
+# metadata$cells <- rownames(metadata)
+# # adding sample type to metadata. The orginal file could be download from SRA explorer
+# 
+# SampleType <- c("BLCA", "BLCA", "Normal", "BLCA", "BLCA", "BLCA", "BLCA", "BLCA", "BLCA", "Normal", "Normal")
+# # sample type with grade (Not tested)
+# #SampleType <- c("BLCA_LG", "BLCA_LG", "Normal", "BLCA_HG", "BLCA_HG", "BLCA_HG", "BLCA_HG", "BLCA_HG", "BLCA_HG", "Normal", "Normal")
+# 
+# names(SampleType) <- c("SRR12603789", "SRR12603790", "SRR12603788", "SRR12603787", "SRR12603786", "SRR12603785", "SRR12603784", "SRR12603783", "SRR12603782", "SRR12603781", "SRR12603780")
+# 
+# metadata$sampleType <- stringr::str_replace_all(metadata$orig.ident, SampleType)
+# 
+# 
+# # Rename columnsdata:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABIAAAASCAYAAABWzo5XAAAAWElEQVR42mNgGPTAxsZmJsVqQApgmGw1yApwKcQiT7phRBuCzzCSDSHGMKINIeDNmWQlA2IigKJwIssQkHdINgxfmBBtGDEBS3KCxBc7pMQgMYE5c/AXPwAwSX4lV3pTWwAAAABJRU5ErkJggg==
+# metadata <- metadata %>%
+#   dplyr::rename(seq_folder = orig.ident,
+#                 nUMI = nCount_RNA,
+#                 nGene = nFeature_RNA,
+#                 sample = sampleType)
+# 
+# # Add metadata back to Seurat object
+# merged_seurat@meta.data <- metadata
+# 
+# # Create .RData object to load at any time
+# save(merged_seurat, file="G:/soloTE_outputs/merged_filtered_seurat.RData")
+load("G:/soloTE_outputs/merged_filtered_seurat.RData")
+
+# #_______________________________# Filteration_________________________#
+
+## Cell based
+
+# Cells that passed the quality metrics based on protein coding gene expression analysis are retained
+# load the scRNA object
+load("C:/Users/User1/Documents/chen2020_scRNA/seurat_filtered.RData")
+selected_cells <- filtered_seurat@meta.data$cells
+rm(filtered_seurat)
+
+filtered_seurat <- subset(merged_seurat, cells = selected_cells)
+
+
+## Gene based
+
+# for TE filtering , we filter out TEs that are expressed in only 10 cells or less
+# Extract counts
+counts <- GetAssayData(object = filtered_seurat, slot = "counts")
+# filter to retrive TE elements
+counts_te <- counts[grepl("SoloTE", rownames(counts)),]
+
+# collapse by repName
+te_colapse <- data.frame(orig_id  = rownames(counts_te))
+
+# A function to extract repName, repFamily and repClass from the rownames
+extract_info <- function(column) {
+  repName <- repFamily <- repClass <- character(length(column))
+  
+  for (i in seq_along(column)) {
+    if (startsWith(column[i], "SoloTE-chr")) {
+      # Pattern for rows starting with "SoloTE-chr"
+      pattern <- "SoloTE-chr[^-]+-(\\d+)-(\\d+)-(.+):(.+):(.+)-([+-])"
+      matches <- regexec(pattern, column[i], perl = TRUE)
+      
+      if (matches[[1]][1] != -1) {
+        repName[i] <- regmatches(column[i], matches)[[1]][4]
+        repFamily[i] <- regmatches(column[i], matches)[[1]][5]
+        repClass[i] <- regmatches(column[i], matches)[[1]][6]
+      } else {
+        # If the pattern doesn't match, keep the original element
+        repName[i] <- repFamily[i] <- repClass[i] <- column[i]
+      }
+    } else {
+      # Pattern for rows not starting with "SoloTE-chr"
+      pattern <- "SoloTE-([^:]+):([^:]+):(.+)"
+      matches <- regexec(pattern, column[i], perl = TRUE)
+      
+      if (matches[[1]][1] != -1) {
+        repName[i] <- regmatches(column[i], matches)[[1]][2]
+        repFamily[i] <- regmatches(column[i], matches)[[1]][3]
+        repClass[i] <- regmatches(column[i], matches)[[1]][4]
+      } else {
+        # If the pattern doesn't match, keep the original element
+        repName[i] <- repFamily[i] <- repClass[i] <- column[i]
+      }
+    }
+  }
+  
+  # Return a data frame with extracted information
+  data.frame(repName, repFamily, repClass)
+}
+
+# add TE names to rownames
+te_colapse <- cbind(te_colapse, extract_info(te_colapse$orig_id))
+rownames(te_colapse) <- te_colapse$orig_id
+
+
+# A function to coolapse count matrix based on rownames at repName level
+
+collapse_rows <- function(counts_te, te_colapse) {
+  # Ensure rownames are the same
+  if (!all(rownames(counts_te) == rownames(te_colapse))) {
+    stop("Row names of counts_te and te_colapse are not identical.")
+  }
+  
+  # Identify unique repNames in te_colapse
+  unique_repNames <- unique(te_colapse$repName)
+  
+  # Initialize progress bar
+  pb <- progress_bar$new(
+    format = "[:bar] :percent | ETA: :eta",
+    total = length(unique_repNames)
+  )
+  
+  # Initialize an empty matrix for the collapsed counts
+  collapsed_counts <- matrix(0, nrow = length(unique_repNames), ncol = ncol(counts_te))
+  rownames(collapsed_counts) <- unique_repNames
+  colnames(collapsed_counts) <- colnames(counts_te)
+  
+  # Iterate through unique repNames and collapse rows
+  for (repName in unique_repNames) {
+    # Update progress bar
+    pb$tick()
+    
+    # Identify rows in counts_te corresponding to repName
+    rows_to_collapse <- te_colapse$repName == repName
+    
+    # Sum the counts for the identified rows
+    collapsed_row <- colSums(counts_te[rows_to_collapse, , drop = FALSE])
+    
+    # Assign the collapsed row to the result matrix
+    collapsed_counts[repName, ] <- collapsed_row
+  }
+  
+  # Close progress bar
+  pb$terminate()
+  
+  return(collapsed_counts)
+}
+
+# to collapse per repName
+collapsed_counts <- collapse_rows(counts_te, te_colapse)
+
+
+# Reassign to filtered Seurat object
+filtered_seurat <- CreateSeuratObject(collapsed_counts, meta.data = filtered_seurat@meta.data)
+
+# Create .RData object to load at any time
+#save(filtered_seurat, file="G:/soloTE_outputs/seurat_filtered.RData")
+load("G:/soloTE_outputs/seurat_filtered.RData")
+
+# extract TE expression matrix
+TE_counts <- GetAssayData(object = filtered_seurat, slot = "counts")
+#
+save(TE_counts, file="G:/soloTE_outputs/TE_raw_counts.RData")
+
+
+#####__________________________________combining with scRNA datasets_______________________________________________######
+
+###
+# loading objects
+setwd("C:/Users/User1/Documents/chen2020_scRNA/")
+
+#
+# Perform log-normalization and feature selection, as well as SCT normalization on global object
+# merged_seurat <- filtered_seurat %>%
+#   NormalizeData() %>%
+#   FindVariableFeatures(selection.method = "vst", nfeatures = 3000) %>% 
+#   ScaleData() %>%
+#   SCTransform(vars.to.regress = c("mitoRatio", "orig.ident"))
+# 
+# # Calculate PCs using variable features determined by SCTransform (3000 by default)
+# merged_seurat <- RunPCA(merged_seurat, assay = "SCT", npcs = 50)
+# 
+# # Integration
+# 
+# harmonized_seurat <- RunHarmony(merged_seurat, 
+#                                 group.by.vars = c("orig.ident", "gender", "Grade"), 
+#                                 reduction = "pca", assay.use = "SCT", reduction.save = "harmony")
+
+# New harmoznied object with all samples
+load("harmonized_seurat.RData")
+
+# 
+harmonized_seurat <- RunUMAP(harmonized_seurat, reduction = "harmony", assay = "SCT", dims = 1:40)
+#harmonized_seurat <- RunUTSNE(harmonized_seurat, reduction = "harmony", assay = "SCT", dims = 1:40)
+
+#________________________Cluster identification and Inspect the effects of Harmony batch removel ____________#
+
+# to set reduction to harmony and finding the clusters
+harmonized_seurat <- FindNeighbors(object = harmonized_seurat, reduction = "harmony")
+harmonized_seurat <- FindClusters(harmonized_seurat, resolution = 0.1) # we set resolution based on ealier work on this dataset
+
+# visualization
+Idents(harmonized_seurat) <- harmonized_seurat@meta.data$SCT_snn_res.0.1
+
+# color cells based on the sample name
+# Plot UMAP 
+#png(filename = "harmony_UMAP_y_sample.png", width = 16, height = 8.135, units = "in", res = 300)
+DimPlot(harmonized_seurat,
+        group.by = "orig.ident",
+        reduction = "umap")
+#dev.off()
+
+# visualization by clusters:
+png(filename = "UMAP_by_cluster_number.png", width = 16, height = 8.135, units = "in", res = 300)
+DimPlot(harmonized_seurat,
+        reduction = "umap",
+        label = TRUE,
+        label.size = 6)
+dev.off()
+
+# Investigating super markers
+markers <- c("EPCAM", "PECAM1", "COL1A1", "PDGFRA", "RGS5", "CD79A", "LYZ", "CD3D", "TPSAB1")
+
+png(filename = "umap_superCluster_cells.png", width = 16, height = 8.135, units = "in", res = 300)
+FeaturePlot(object = harmonized_seurat,
+            features = markers,
+            order = TRUE,
+            min.cutoff = "q10",
+            reduction = "umap",
+            label = TRUE,
+            repel = TRUE)
+
+dev.off()
+
+# cluster name assignmnet
+# Rename all identities
+harmonized_seurat <- RenameIdents(object = harmonized_seurat, 
+                                  "0" = "Epithelial cells",
+                                  "1" = "T cells", # impureity with epithelial cells
+                                  "2" = "Endothelial cells",
+                                  "3" = "i-CAF",
+                                  "4" = "myeloid cells",
+                                  "5" = "myo-CAF",
+                                  "6" = "Epithelial cells",
+                                  "7" = "T cells",
+                                  "8" = "APCs(Macrophages, B-cells)",
+                                  "9" = "Mast cells")
+
+
+
+# Plot the UMAP withy new labells
+
+# jco colors
+# ggsci::pal_jco("default")(8)
+# or
+#pal_jco("default", alpha = 0.6)(8)
+
+jco <- c("#0073C2FF", "#EFC000FF", "#868686FF", "#CD534CFF", "#7AA6DCFF", "#003C67FF", "#8F7700FF", "#3B3B3BFF")
+
+png(filename = "harmont_blca_umap_with_label.png", width = 16, height = 8.135, units = "in", res = 600)
+DimPlot(object = harmonized_seurat, 
+        reduction = "umap", 
+        label = TRUE,
+        label.size = 3,
+        repel = TRUE,
+        split.by = "Invasiveness",
+        cols  = pal_jco("default", alpha = 0.6)(8))
+dev.off()
+
+# # T cell clusters
+# # CD4 (Cluster of Differentiation 4): CD4 is a co-receptor that is often expressed on helper T-cells.
+# # CD8A (Cluster of Differentiation 8 Alpha): CD8A is a marker for cytotoxic T-cells.
+# # CD45 (Protein Tyrosine Phosphatase, Receptor Type C): CD45 is a pan-leukocyte marker, and different isoforms are expressed on T-cells.
+# # CD25 (Interleukin-2 Receptor Alpha): CD25 is expressed on activated T-cells.
+# # FOXP3 (Forkhead Box P3): FOXP3 is a marker for regulatory T-cells (Tregs).
+# # CCR7 (C-C Chemokine Receptor Type 7): CCR7 is associated with T-cell homing to lymphoid tissues.
+# # CD28 (Cluster of Differentiation 28): CD28 is a co-stimulatory molecule on T-cells.
+# 
+# 
+# # gene name considerations: CD45 gene symbol is PTPRC, CD25, IL2RA
+# t_cell_markers <- c("CD3D", "CD4", "CD8A", "PTPRC", "IL2RA", "FOXP3", "CCR7", "CD28")
+# 
+# png(filename = "t_cells.png", width = 16, height = 8.135, units = "in", res = 600)
+# 
+# FeaturePlot(object = harmonized_seurat,
+#             features = t_cell_markers,
+#             order = TRUE,
+#             min.cutoff = "q10",
+#             reduction = "umap",
+#             label = TRUE,
+#             repel = TRUE)
+# dev.off()
+
+
+
+
+# Adding TE_expression to the Seurta object and processing that 
+load("G:/soloTE_outputs/TE_raw_counts.RData")
+
+# cells to be added to the TE_counts
+cells_to_be_added <- rownames(harmonized_seurat@meta.data)[-which(rownames(harmonized_seurat@meta.data) %in% colnames(TE_counts))]
+# create a matrix
+mtx <- matrix(ncol = length(cells_to_be_added), nrow = nrow(TE_counts))
+rownames(mtx) <- rownames(TE_counts)
+colnames(mtx) <- cells_to_be_added
+mtx[is.na(mtx)] <- 0
+TE_counts <- as.matrix(cbind(TE_counts, mtx))
+# reorder TE_counts based on the current order of cells in harmozied object
+TE_counts <- TE_counts[, colnames(harmonized_seurat)]
+
+# # create a new assay to store ADT information
+te_assay <- CreateAssayObject(counts = TE_counts)
+
+# add this assay to the previously created Seurat object
+harmonized_seurat[["TE"]] <- te_assay
+
+# Validate that the object now contains multiple assays
+Assays(harmonized_seurat)
+
+# set assay to TE and normalize the data 
+DefaultAssay(harmonized_seurat) <- "TE"
+
+# processing TE expression
+harmonized_seurat <- harmonized_seurat %>%
+  NormalizeData() %>%
+  FindVariableFeatures(selection.method = "vst", nfeatures = 200) %>%
+  ScaleData() %>%
+  SCTransform(vars.to.regress = c("mitoRatio", "orig.ident"))
+
+DefaultAssay(harmonized_seurat) <- "TE"
+
+top10 <- head(VariableFeatures(harmonized_seurat), 10)
+
+
+
+# visualizations
+png(filename = "highly_variable_TEs.png", width = 16, height = 8.135, units = "in", res = 600)
+FeaturePlot(object = harmonized_seurat,
+            features = top10,
+            cols =  pal_jco("default", alpha = 0.6)(3)[c(3,2)],
+            order = TRUE,
+            min.cutoff = "q10",
+            reduction = "umap",
+            label = TRUE,
+            label.size = 3,
+            repel = TRUE)
+dev.off()
+
+
+# cells from MIBC and NMIBC
+mibc_cells <- rownames(harmonized_seurat@meta.data)[harmonized_seurat@meta.data$Invasiveness=="Invasive"]
+nmibc_cells <- rownames(harmonized_seurat@meta.data)[harmonized_seurat@meta.data$Invasiveness=="Noninvasive"]
+normal_cells <- rownames(harmonized_seurat@meta.data)[harmonized_seurat@meta.data$Invasiveness=="normal"]
+
+# MIBC
+png(filename = "highly_variable_MIBC_TEs.png", width = 16, height = 8.135, units = "in", res = 600)
+FeaturePlot(object = harmonized_seurat,
+            features = top10,
+            cells = mibc_cells,
+            cols =  pal_jco("default", alpha = 0.6)(3)[c(3,2)],
+            order = TRUE,
+            min.cutoff = "q10",
+            reduction = "umap",
+            label = TRUE,
+            label.size = 3,
+            repel = TRUE)
+dev.off()
+#NMIBC
+png(filename = "highly_variable_NMIBC_TEs.png", width = 16, height = 8.135, units = "in", res = 600)
+FeaturePlot(object = harmonized_seurat,
+            features = top10,
+            cells = nmibc_cells,
+            cols =  pal_jco("default", alpha = 0.6)(3)[c(3,2)],
+            order = TRUE,
+            min.cutoff = "q10",
+            reduction = "umap",
+            label = TRUE,
+            label.size = 3,
+            repel = TRUE)
+dev.off()
+# Normal
+png(filename = "highly_variable_Normal_TEs.png", width = 16, height = 8.135, units = "in", res = 600)
+FeaturePlot(object = harmonized_seurat,
+            features = top10,
+            cells = normal_cells,
+            cols =  pal_jco("default", alpha = 0.6)(3)[c(3,2)],
+            order = TRUE,
+            min.cutoff = "q10",
+            reduction = "umap",
+            label = TRUE,
+            label.size = 3,
+            repel = TRUE)
+dev.off()
+
+# to compare side by side
+
+mibc <- FeaturePlot(object = harmonized_seurat,
+                    features = top10,combine = FALSE, cells = mibc_cells, cols =  pal_jco("default", alpha = 0.6)(3)[c(3,2)],order = TRUE,min.cutoff = "q10",reduction = "umap",label = TRUE, label.size = 3,repel = TRUE)
+nmibc <- FeaturePlot(object = harmonized_seurat,
+                    features = top10,combine = FALSE, cells = nmibc_cells, cols =  pal_jco("default", alpha = 0.6)(3)[c(3,2)],order = TRUE,min.cutoff = "q10",reduction = "umap",label = TRUE, label.size = 3,repel = TRUE)
+normal <- FeaturePlot(object = harmonized_seurat,
+                     features = top10,combine = FALSE, cells = normal_cells, cols =  pal_jco("default", alpha = 0.6)(3)[c(3,2)],order = TRUE,min.cutoff = "q10",reduction = "umap",label = TRUE, label.size = 3,repel = TRUE)
+
+# save image of the enviornment
+save.image("G:/soloTE_outputs/scRNA_TE-2024-01-07.Rdata")
+
+
+
