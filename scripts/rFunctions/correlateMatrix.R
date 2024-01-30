@@ -63,6 +63,8 @@ correlateMatrix <- function(df1, df2, show_progress = TRUE) {
   
   # Add FDR to the result table
   result_df$FDR <- p.adjust(result_df$p_value, method = "fdr")
+  # sort
+  result_df <- result_df[order(abs(result_df$correlation_coefficient), decreasing = T),]
   
   # Return result
   return(result_df)
